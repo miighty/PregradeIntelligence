@@ -1,0 +1,189 @@
+{
+  "_documentation": {
+    "description": "Example request and response JSON for PreGrade API",
+    "endpoint": "POST /v1/analyze",
+    "content_type": "application/json",
+    "authentication": "X-API-Key header required"
+  },
+
+  "example_request": {
+    "_description": "Standard analysis request with front image only",
+    "headers": {
+      "Content-Type": "application/json",
+      "X-API-Key": "pk_live_xxxxxxxxxxxxxxxxxxxx"
+    },
+    "body": {
+      "front_image": {
+        "encoding": "base64",
+        "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+        "media_type": "image/png"
+      },
+      "card_type": "pokemon",
+      "client_reference": "user-upload-12345"
+    }
+  },
+
+  "example_request_with_back": {
+    "_description": "Analysis request with both front and back images",
+    "headers": {
+      "Content-Type": "application/json",
+      "X-API-Key": "pk_live_xxxxxxxxxxxxxxxxxxxx"
+    },
+    "body": {
+      "front_image": {
+        "encoding": "url",
+        "data": "https://s3.amazonaws.com/pregrade-uploads/abc123/front.jpg"
+      },
+      "back_image": {
+        "encoding": "url",
+        "data": "https://s3.amazonaws.com/pregrade-uploads/abc123/back.jpg"
+      },
+      "card_type": "pokemon",
+      "client_reference": "dealer-batch-789"
+    }
+  },
+
+  "example_success_response": {
+    "_description": "Successful analysis with grading recommended",
+    "_http_status": 200,
+    "api_version": "1.0",
+    "request_id": "req_a1b2c3d4e5f6",
+    "client_reference": "user-upload-12345",
+    "result": {
+      "request_id": "req_a1b2c3d4e5f6",
+      "card_identity": {
+        "set_name": "Base Set",
+        "card_name": "Charizard",
+        "card_number": "4/102",
+        "variant": "Holo",
+        "confidence": 0.97,
+        "match_method": "visual_fingerprint_match"
+      },
+      "condition_signals": [
+        {
+          "signal_type": "centering",
+          "observation": "Front centering shows slight left-right variance within acceptable range",
+          "severity": "minor",
+          "confidence": 0.91,
+          "evidence_description": "Left border measures 2.1mm, right border measures 1.8mm"
+        },
+        {
+          "signal_type": "corners",
+          "observation": "All four corners show minimal wear consistent with pack-fresh condition",
+          "severity": "none",
+          "confidence": 0.88,
+          "evidence_description": "Corner radius analysis shows no flattening or whitening"
+        },
+        {
+          "signal_type": "surface",
+          "observation": "Holo surface shows light scratching visible under magnification",
+          "severity": "minor",
+          "confidence": 0.85,
+          "evidence_description": "Two hairline scratches detected in holo pattern area"
+        },
+        {
+          "signal_type": "edges",
+          "observation": "Edge wear minimal, no visible chipping or whitening",
+          "severity": "none",
+          "confidence": 0.89,
+          "evidence_description": "Edge analysis shows consistent colour along all borders"
+        }
+      ],
+      "gatekeeper_result": {
+        "accepted": true,
+        "reason_codes": [],
+        "reasons": [],
+        "explanation": "Image quality and card visibility meet all requirements for analysis"
+      },
+      "roi_result": {
+        "recommendation": "recommended",
+        "risk_band": "low",
+        "confidence": 0.84,
+        "factors": [
+          "high_base_market_value",
+          "condition_signals_predominantly_minor_or_none",
+          "iconic_card_strong_demand",
+          "holo_surface_signals_acceptable"
+        ],
+        "explanation": "Based on observed condition signals and current market context, professional grading is likely to yield positive ROI. The combination of high base value and predominantly minor condition signals suggests favourable outcome probability."
+      },
+      "processed_at": "2026-01-26T14:30:00Z"
+    }
+  },
+
+  "example_rejection_response": {
+    "_description": "Gatekeeper rejection - valid outcome, NOT an error",
+    "_http_status": 200,
+    "_important": "This is HTTP 200 because rejections are valid, expected, billable outcomes",
+    "api_version": "1.0",
+    "request_id": "req_x9y8z7w6v5u4",
+    "client_reference": "user-upload-67890",
+    "result": {
+      "request_id": "req_x9y8z7w6v5u4",
+      "card_identity": null,
+      "condition_signals": [],
+      "gatekeeper_result": {
+        "accepted": false,
+        "reason_codes": [
+          "IMAGE_QUALITY_INSUFFICIENT",
+          "CARD_PARTIALLY_OBSCURED"
+        ],
+        "reasons": [
+          "Image resolution is below the minimum threshold required for reliable condition analysis",
+          "Sleeve glare obscures approximately 30% of the card surface"
+        ],
+        "explanation": "Analysis cannot proceed due to image quality limitations. The submitted image does not meet the minimum requirements for reliable condition signal extraction. Please resubmit with a higher resolution image and reduced glare."
+      },
+      "roi_result": null,
+      "processed_at": "2026-01-26T14:35:00Z"
+    }
+  },
+
+  "example_error_response_validation": {
+    "_description": "Validation error - missing required field",
+    "_http_status": 400,
+    "api_version": "1.0",
+    "request_id": null,
+    "error_code": "MISSING_REQUIRED_FIELD",
+    "error_message": "Request validation failed: required field 'front_image' is missing",
+    "details": [
+      {
+        "field": "front_image",
+        "issue": "This field is required but was not provided"
+      }
+    ]
+  },
+
+  "example_error_response_auth": {
+    "_description": "Authentication error - invalid API key",
+    "_http_status": 401,
+    "api_version": "1.0",
+    "request_id": null,
+    "error_code": "INVALID_API_KEY",
+    "error_message": "The provided API key is invalid or has been revoked"
+  },
+
+  "example_error_response_image": {
+    "_description": "Validation error - image too large",
+    "_http_status": 400,
+    "api_version": "1.0",
+    "request_id": "req_m1n2o3p4q5r6",
+    "error_code": "IMAGE_TOO_LARGE",
+    "error_message": "The submitted image exceeds the maximum allowed size of 10MB",
+    "details": [
+      {
+        "field": "front_image.data",
+        "issue": "Image size is 15.2MB, maximum allowed is 10MB"
+      }
+    ]
+  },
+
+  "example_error_response_server": {
+    "_description": "Internal server error",
+    "_http_status": 500,
+    "api_version": "1.0",
+    "request_id": "req_s1t2u3v4w5x6",
+    "error_code": "INTERNAL_ERROR",
+    "error_message": "An unexpected error occurred while processing the request. Please retry or contact support with the request_id."
+  }
+}

@@ -1,0 +1,8 @@
+# PreGrade Backend Dependencies
+
+# Image processing
+Pillow>=10.0.0
+numpy>=1.24.0
+
+# OCR
+pytesseract>=0.3.10
