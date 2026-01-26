@@ -16,7 +16,6 @@ from services.card_identity import (
     _compute_image_hash,
     _parse_card_name,
     _parse_card_number,
-    _parse_set_name,
     _calculate_confidence,
     _preprocess_image,
 )
@@ -161,14 +160,6 @@ class TestParsing:
         assert _parse_card_number('no number here') is None
         assert _parse_card_number('') is None
         assert _parse_card_number(None) is None
-    
-    def test_parse_set_name_empty_input(self):
-        assert _parse_set_name('') == 'Unknown Set'
-        assert _parse_set_name(None) == 'Unknown Set'
-    
-    def test_parse_set_name_filters_numbers(self):
-        result = _parse_set_name('4/102 Base Set')
-        assert 'Base Set' in result
 
 
 class TestConfidenceCalculation:
@@ -177,48 +168,42 @@ class TestConfidenceCalculation:
     def test_full_confidence_all_fields(self):
         confidence = _calculate_confidence(
             card_name='Charizard',
-            card_number='4/102',
-            set_name='Base Set'
+            card_number='4/102'
         )
         assert confidence == 1.0
     
     def test_zero_confidence_no_fields(self):
         confidence = _calculate_confidence(
             card_name='',
-            card_number=None,
-            set_name='Unknown Set'
+            card_number=None
         )
         assert confidence == 0.0
     
     def test_partial_confidence_name_only(self):
         confidence = _calculate_confidence(
             card_name='Charizard',
-            card_number=None,
-            set_name='Unknown Set'
+            card_number=None
         )
-        assert confidence == 0.4
+        assert confidence == 0.5
     
     def test_partial_confidence_number_only(self):
         confidence = _calculate_confidence(
             card_name='',
-            card_number='4/102',
-            set_name='Unknown Set'
+            card_number='4/102'
         )
-        assert confidence == 0.35
+        assert confidence == 0.5
     
     def test_short_name_reduced_confidence(self):
         confidence = _calculate_confidence(
             card_name='AB',
-            card_number=None,
-            set_name='Unknown Set'
+            card_number=None
         )
-        assert confidence == 0.15
+        assert confidence == 0.2
     
     def test_confidence_is_rounded(self):
         confidence = _calculate_confidence(
             card_name='Charizard',
-            card_number='4/102',
-            set_name='Unknown Set'
+            card_number='4/102'
         )
         assert confidence == round(confidence, 2)
 

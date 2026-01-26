@@ -27,13 +27,13 @@ class OCRRegion:
     right_ratio: float
 
 
-NAME_REGION = OCRRegion(top_ratio=0.0, bottom_ratio=0.10, left_ratio=0.05, right_ratio=0.85)
-FOOTER_REGION = OCRRegion(top_ratio=0.90, bottom_ratio=1.0, left_ratio=0.0, right_ratio=1.0)
+NAME_REGION = OCRRegion(top_ratio=0.012, bottom_ratio=0.055, left_ratio=0.08, right_ratio=0.55)
+CARD_NUMBER_REGION = OCRRegion(top_ratio=0.97, bottom_ratio=1.0, left_ratio=0.80, right_ratio=0.96)
 
 CARD_NUMBER_PATTERN = re.compile(r'(\d{1,3})\s*/\s*(\d{1,3})')
 TESSERACT_LANG = 'eng'
-TESSERACT_NAME_CONFIG = '--psm 7 --oem 3'
-TESSERACT_FOOTER_CONFIG = '--psm 6 --oem 3'
+TESSERACT_NAME_CONFIG = '--psm 8 --oem 1'
+TESSERACT_NUMBER_CONFIG = '--psm 7 --oem 1'
 
 
 def extract_card_identity(image: Image.Image) -> CardIdentity:
@@ -42,22 +42,24 @@ def extract_card_identity(image: Image.Image) -> CardIdentity:
     
     Returns CardIdentity with confidence score. Low confidence indicates
     extraction uncertainty; no exceptions are raised for OCR failures.
+    
+    Note: Tesseract OCR has limited accuracy on Pokémon card stylized fonts.
+    For production use, consider cloud OCR services (Google Vision, AWS Textract).
     """
     image_hash = _compute_image_hash(image)
     
-    preprocessed = _preprocess_image(image)
+    rgb_image = image.convert('RGB') if image.mode != 'RGB' else image
     
-    name_raw = _extract_region_text(preprocessed, NAME_REGION, TESSERACT_NAME_CONFIG)
-    footer_raw = _extract_region_text(preprocessed, FOOTER_REGION, TESSERACT_FOOTER_CONFIG)
+    name_raw = _extract_region_text(rgb_image, NAME_REGION, TESSERACT_NAME_CONFIG)
+    number_raw = _extract_region_text(rgb_image, CARD_NUMBER_REGION, TESSERACT_NUMBER_CONFIG)
     
     card_name = _parse_card_name(name_raw)
-    card_number = _parse_card_number(footer_raw)
-    set_name = _parse_set_name(footer_raw)
+    card_number = _parse_card_number(number_raw)
     
-    confidence = _calculate_confidence(card_name, card_number, set_name)
+    confidence = _calculate_confidence(card_name, card_number)
     
     return CardIdentity(
-        set_name=set_name,
+        set_name="Unknown Set",
         card_name=card_name,
         card_number=card_number,
         variant=None,
@@ -96,7 +98,7 @@ def _compute_image_hash(image: Image.Image) -> str:
 def _preprocess_image(image: Image.Image) -> Image.Image:
     """
     Preprocess image to improve OCR accuracy.
-    Converts to grayscale, enhances contrast, and applies sharpening.
+    Converts to grayscale, enhances contrast, reduces noise, and sharpens.
     """
     if image.mode != 'L':
         processed = image.convert('L')
@@ -104,8 +106,9 @@ def _preprocess_image(image: Image.Image) -> Image.Image:
         processed = image.copy()
     
     enhancer = ImageEnhance.Contrast(processed)
-    processed = enhancer.enhance(1.5)
+    processed = enhancer.enhance(2.0)
     
+    processed = processed.filter(ImageFilter.GaussianBlur(radius=0.5))
     processed = processed.filter(ImageFilter.SHARPEN)
     
     return processed
@@ -155,50 +158,25 @@ def _parse_card_number(raw_text: str) -> Optional[str]:
     return None
 
 
-def _parse_set_name(footer_text: str) -> str:
-    """
-    Parse set name from footer OCR text.
-    Returns 'Unknown Set' if no set name can be extracted.
-    """
-    if not footer_text:
-        return "Unknown Set"
-    
-    lines = footer_text.split('\n')
-    
-    for line in lines:
-        cleaned = re.sub(r'\d+\s*/\s*\d+', '', line)
-        cleaned = re.sub(r'[^A-Za-z\s\'\-]', '', cleaned)
-        cleaned = ' '.join(cleaned.split())
-        
-        if len(cleaned) >= 3:
-            return cleaned
-    
-    return "Unknown Set"
-
-
-def _calculate_confidence(card_name: str, card_number: Optional[str], set_name: str) -> float:
+def _calculate_confidence(card_name: str, card_number: Optional[str]) -> float:
     """
     Calculate confidence score based on extraction quality.
     
     Weights:
-    - Card name present with reasonable length (3-50 chars): 0.4
-    - Card name present but unusual length: 0.15
-    - Card number successfully parsed: 0.35
-    - Set name identified (not 'Unknown Set'): 0.25
+    - Card name present with reasonable length (3-50 chars): 0.50
+    - Card name present but unusual length: 0.20
+    - Card number successfully parsed: 0.50
     """
     score = 0.0
     
     if card_name:
         if 3 <= len(card_name) <= 50:
-            score += 0.40
+            score += 0.50
         else:
-            score += 0.15
+            score += 0.20
     
     if card_number is not None:
-        score += 0.35
-    
-    if set_name and set_name != "Unknown Set":
-        score += 0.25
+        score += 0.50
     
     return round(score, 2)
 
