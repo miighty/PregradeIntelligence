@@ -42,15 +42,11 @@ TESSERACT_LANG = 'eng'
 # - psm 7: single line
 # - psm 8: single word
 # Note: whitelist helps reduce garbage characters.
-# psm 7 = single line; also tell Tesseract to ignore the image inversion heuristics.
-TESSERACT_NAME_CONFIG = (
-    "--psm 7 --oem 1 "
-    "-c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzéÉ'- "
-)
-TESSERACT_NUMBER_CONFIG = (
-    "--psm 7 --oem 1 "
-    "-c tessedit_char_whitelist=0123456789/"
-)
+# psm 7 = single line.
+# NOTE: Avoid spaces inside -c values unless you quote carefully; it breaks arg parsing.
+# Keep configs conservative; tune via preprocessing + region choice first.
+TESSERACT_NAME_CONFIG = "--psm 7 --oem 1 -c preserve_interword_spaces=1"
+TESSERACT_NUMBER_CONFIG = "--psm 7 --oem 1 -c tessedit_char_whitelist=0123456789/"
 
 
 def extract_card_identity(image: Image.Image) -> CardIdentity:
