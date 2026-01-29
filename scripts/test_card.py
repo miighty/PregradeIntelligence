@@ -16,6 +16,9 @@ import sys
 import os
 import json
 
+# Prevent pytest from collecting this script as a test module.
+__test__ = False
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from services.card_identity import extract_card_identity_from_path
