@@ -26,6 +26,7 @@ if str(REPO_ROOT) not in sys.path:
 from services.card_identity import (
     extract_card_identity_from_path,
     _extract_region_text,
+    _crop_region,
     NAME_REGION_A,
     NAME_REGION_B,
     CARD_NUMBER_REGION_LEFT,
@@ -33,6 +34,8 @@ from services.card_identity import (
     TESSERACT_NAME_CONFIG,
     TESSERACT_NUMBER_CONFIG,
 )
+
+from services.card_number import parse_card_number_from_crop
 
 
 def main() -> None:
@@ -69,6 +72,11 @@ def main() -> None:
             print("ocr.name.b:", repr(name_raw_b))
             print("ocr.num.right:", repr(num_r))
             print("ocr.num.left:", repr(num_l))
+
+            pr = parse_card_number_from_crop(_crop_region(img, CARD_NUMBER_REGION_RIGHT))
+            pl = parse_card_number_from_crop(_crop_region(img, CARD_NUMBER_REGION_LEFT))
+            print("tmpl.num.right:", pr)
+            print("tmpl.num.left:", pl)
 
             if out_dir:
                 stem = Path(path).stem

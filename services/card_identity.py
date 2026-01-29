@@ -16,6 +16,7 @@ from PIL import Image, ImageEnhance, ImageFilter
 import numpy as np
 
 from domain.types import CardIdentity
+from services.card_number import parse_card_number_from_crop
 
 
 @dataclass(frozen=True)
@@ -67,12 +68,16 @@ def extract_card_identity(image: Image.Image) -> CardIdentity:
     name_raw_a = _extract_region_text(rgb_image, NAME_REGION_A, TESSERACT_NAME_CONFIG)
     name_raw_b = _extract_region_text(rgb_image, NAME_REGION_B, TESSERACT_NAME_CONFIG)
 
-    # Try both bottom corners for the set number/total.
-    number_raw_right = _extract_region_text(rgb_image, CARD_NUMBER_REGION_RIGHT, TESSERACT_NUMBER_CONFIG)
-    number_raw_left = _extract_region_text(rgb_image, CARD_NUMBER_REGION_LEFT, TESSERACT_NUMBER_CONFIG)
-
     card_name = _best_name(_parse_card_name(name_raw_a), _parse_card_name(name_raw_b))
-    card_number = _parse_card_number(number_raw_right) or _parse_card_number(number_raw_left)
+
+    # Card number: try deterministic template matcher first (more reliable than OCR).
+    number_crop_r = _crop_region(rgb_image, CARD_NUMBER_REGION_RIGHT)
+    number_crop_l = _crop_region(rgb_image, CARD_NUMBER_REGION_LEFT)
+
+    parsed_r = parse_card_number_from_crop(number_crop_r)
+    parsed_l = parse_card_number_from_crop(number_crop_l)
+
+    card_number = (parsed_r.number if parsed_r else None) or (parsed_l.number if parsed_l else None)
     
     confidence = _calculate_confidence(card_name, card_number)
     
@@ -138,17 +143,19 @@ def _preprocess_image(image: Image.Image) -> Image.Image:
     return processed
 
 
+def _crop_region(image: Image.Image, region: OCRRegion) -> Image.Image:
+    width, height = image.size
+    left = int(width * region.left_ratio)
+    right = int(width * region.right_ratio)
+    top = int(height * region.top_ratio)
+    bottom = int(height * region.bottom_ratio)
+    return image.crop((left, top, right, bottom))
+
+
 def _extract_region_text(image: Image.Image, region: OCRRegion, config: str) -> str:
     """Extract text from a specific region of the image."""
     try:
-        width, height = image.size
-
-        left = int(width * region.left_ratio)
-        right = int(width * region.right_ratio)
-        top = int(height * region.top_ratio)
-        bottom = int(height * region.bottom_ratio)
-
-        cropped = image.crop((left, top, right, bottom))
+        cropped = _crop_region(image, region)
         cropped = _preprocess_image(cropped)
 
         text = pytesseract.image_to_string(cropped, lang=TESSERACT_LANG, config=config)
