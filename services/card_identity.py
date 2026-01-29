@@ -28,12 +28,20 @@ class OCRRegion:
 
 
 NAME_REGION = OCRRegion(top_ratio=0.012, bottom_ratio=0.055, left_ratio=0.08, right_ratio=0.55)
-CARD_NUMBER_REGION = OCRRegion(top_ratio=0.97, bottom_ratio=1.0, left_ratio=0.80, right_ratio=0.96)
+
+# Card number placement varies by era/template; try both corners.
+CARD_NUMBER_REGION_RIGHT = OCRRegion(top_ratio=0.955, bottom_ratio=1.0, left_ratio=0.72, right_ratio=0.98)
+CARD_NUMBER_REGION_LEFT = OCRRegion(top_ratio=0.955, bottom_ratio=1.0, left_ratio=0.02, right_ratio=0.32)
 
 CARD_NUMBER_PATTERN = re.compile(r'(\d{1,3})\s*/\s*(\d{1,3})')
 TESSERACT_LANG = 'eng'
-TESSERACT_NAME_CONFIG = '--psm 8 --oem 1'
-TESSERACT_NUMBER_CONFIG = '--psm 7 --oem 1'
+
+# OCR configs tuned for small, high-contrast text regions.
+# - psm 7: single line
+# - psm 8: single word
+# Note: whitelist helps reduce garbage characters.
+TESSERACT_NAME_CONFIG = '--psm 7 --oem 1 -c tessedit_char_whitelist="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzéÉ\'\- "'
+TESSERACT_NUMBER_CONFIG = '--psm 7 --oem 1 -c tessedit_char_whitelist="0123456789/"'
 
 
 def extract_card_identity(image: Image.Image) -> CardIdentity:
@@ -51,10 +59,13 @@ def extract_card_identity(image: Image.Image) -> CardIdentity:
     rgb_image = image.convert('RGB') if image.mode != 'RGB' else image
     
     name_raw = _extract_region_text(rgb_image, NAME_REGION, TESSERACT_NAME_CONFIG)
-    number_raw = _extract_region_text(rgb_image, CARD_NUMBER_REGION, TESSERACT_NUMBER_CONFIG)
-    
+
+    # Try both bottom corners for the set number/total.
+    number_raw_right = _extract_region_text(rgb_image, CARD_NUMBER_REGION_RIGHT, TESSERACT_NUMBER_CONFIG)
+    number_raw_left = _extract_region_text(rgb_image, CARD_NUMBER_REGION_LEFT, TESSERACT_NUMBER_CONFIG)
+
     card_name = _parse_card_name(name_raw)
-    card_number = _parse_card_number(number_raw)
+    card_number = _parse_card_number(number_raw_right) or _parse_card_number(number_raw_left)
     
     confidence = _calculate_confidence(card_name, card_number)
     
@@ -96,21 +107,27 @@ def _compute_image_hash(image: Image.Image) -> str:
 
 
 def _preprocess_image(image: Image.Image) -> Image.Image:
+    """Preprocess a cropped region to improve OCR accuracy.
+
+    We keep this deterministic (no randomness) and fast:
+    - grayscale
+    - upsample 2x (small text)
+    - contrast boost
+    - light denoise
+    - binarize (simple threshold)
     """
-    Preprocess image to improve OCR accuracy.
-    Converts to grayscale, enhances contrast, reduces noise, and sharpens.
-    """
-    if image.mode != 'L':
-        processed = image.convert('L')
-    else:
-        processed = image.copy()
-    
-    enhancer = ImageEnhance.Contrast(processed)
-    processed = enhancer.enhance(2.0)
-    
-    processed = processed.filter(ImageFilter.GaussianBlur(radius=0.5))
-    processed = processed.filter(ImageFilter.SHARPEN)
-    
+    processed = image.convert('L')
+
+    # Upscale to help Tesseract on small UI text.
+    w, h = processed.size
+    processed = processed.resize((max(1, w * 2), max(1, h * 2)), resample=Image.Resampling.BICUBIC)
+
+    processed = ImageEnhance.Contrast(processed).enhance(2.2)
+    processed = processed.filter(ImageFilter.MedianFilter(size=3))
+
+    # Binarize with a fixed threshold (deterministic).
+    processed = processed.point(lambda p: 255 if p > 160 else 0)
+
     return processed
 
 
@@ -118,14 +135,15 @@ def _extract_region_text(image: Image.Image, region: OCRRegion, config: str) -> 
     """Extract text from a specific region of the image."""
     try:
         width, height = image.size
-        
+
         left = int(width * region.left_ratio)
         right = int(width * region.right_ratio)
         top = int(height * region.top_ratio)
         bottom = int(height * region.bottom_ratio)
-        
+
         cropped = image.crop((left, top, right, bottom))
-        
+        cropped = _preprocess_image(cropped)
+
         text = pytesseract.image_to_string(cropped, lang=TESSERACT_LANG, config=config)
         return text.strip()
     except Exception:
