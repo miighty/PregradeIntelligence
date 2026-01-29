@@ -42,8 +42,15 @@ TESSERACT_LANG = 'eng'
 # - psm 7: single line
 # - psm 8: single word
 # Note: whitelist helps reduce garbage characters.
-TESSERACT_NAME_CONFIG = '--psm 7 --oem 1 -c tessedit_char_whitelist="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzéÉ\'\- "'
-TESSERACT_NUMBER_CONFIG = '--psm 7 --oem 1 -c tessedit_char_whitelist="0123456789/"'
+# psm 7 = single line; also tell Tesseract to ignore the image inversion heuristics.
+TESSERACT_NAME_CONFIG = (
+    "--psm 7 --oem 1 "
+    "-c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzéÉ'- "
+)
+TESSERACT_NUMBER_CONFIG = (
+    "--psm 7 --oem 1 "
+    "-c tessedit_char_whitelist=0123456789/"
+)
 
 
 def extract_card_identity(image: Image.Image) -> CardIdentity:
@@ -169,15 +176,37 @@ def _best_name(a: str, b: str) -> str:
 
 
 def _parse_card_name(raw_text: str) -> str:
-    """Parse card name from OCR text, preserving valid Pokémon name characters."""
+    """Parse card name from OCR text.
+
+    We intentionally try to drop common template noise like:
+    - "Evolves from ..."
+    - "Basic" / "Stage 1" / "Stage 2"
+    and keep the leftmost part which usually contains the card name.
+    """
     if not raw_text:
         return ""
 
-    first_line = raw_text.split('\n')[0].strip()
-    cleaned = re.sub(r"[^A-Za-z\s'\-éÉ]", "", first_line)
+    first_line = raw_text.split("\n")[0].strip()
+
+    # Keep only plausible characters.
+    cleaned = re.sub(r"[^A-Za-z\s'\-éÉ]", " ", first_line)
     cleaned = " ".join(cleaned.split())
 
-    return cleaned
+    # Strip common template phrases.
+    lowered = cleaned.lower()
+    for token in ["evolves from", "basic", "stage", "from"]:
+        idx = lowered.find(token)
+        if idx != -1:
+            cleaned = cleaned[:idx].strip()
+            lowered = cleaned.lower()
+
+    # If we still have multiple words, prefer the first 1–2 words as name.
+    parts = cleaned.split()
+    if not parts:
+        return ""
+
+    # Most Pokémon names are 1 word; allow 2 for cases like "Mr Mime" (future).
+    return " ".join(parts[:2])
 
 
 def _parse_card_number(raw_text: str) -> Optional[str]:
