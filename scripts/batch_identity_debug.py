@@ -17,6 +17,12 @@ from pathlib import Path
 
 from PIL import Image
 
+# Ensure repo root is on sys.path when running as a script.
+import sys
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 from services.card_identity import (
     extract_card_identity_from_path,
     _extract_region_text,
