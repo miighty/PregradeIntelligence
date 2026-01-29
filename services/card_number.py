@@ -38,7 +38,11 @@ _FONT_CANDIDATES = [
 
 
 def parse_card_number_from_crop(crop: Image.Image) -> Optional[ParsedNumber]:
-    """Parse x/yy from an already-cropped number region."""
+    """Parse x/yy from an already-cropped number region.
+
+    Important: these number corners often include UI icons/background.
+    We first try to auto-crop to the *darkest text blob* before segmentation.
+    """
     # Normalize input
     img = crop.convert("L")
 
@@ -47,19 +51,20 @@ def parse_card_number_from_crop(crop: Image.Image) -> Optional[ParsedNumber]:
 
     # Upscale aggressively
     w, h = img.size
-    scale = 10
+    scale = 12
     img = img.resize((max(1, w * scale), max(1, h * scale)), resample=Image.Resampling.BICUBIC)
 
-    # Binarize for dark text on lighter background.
     arr = np.array(img, dtype=np.uint8)
 
-    # Adaptive-ish threshold: use a percentile of brightness.
-    # Digits are usually among the darkest pixels.
-    t = int(np.percentile(arr, 35))
+    # Use a dark threshold (low percentile) to avoid swallowing the background.
+    t = int(np.percentile(arr, 8))
     bw = (arr <= t).astype(np.uint8)  # 1 for ink
 
+    # Auto-crop around ink (drops icons/background).
+    bw, arr = _autocrop_to_ink(bw, arr)
+
     # Remove tiny specks
-    bw = _remove_small_components(bw, min_area=120)
+    bw = _remove_small_components(bw, min_area=40)
 
     boxes = _connected_component_boxes(bw)
     if not boxes:
@@ -284,6 +289,30 @@ def _overlap_ratio(a: tuple[int, int], b: tuple[int, int]) -> float:
     return inter / denom
 
 
+def _autocrop_to_ink(bw: np.ndarray, gray: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Crop to a tight-ish region containing ink.
+
+    This helps when the corner crop includes UI icons or textured backgrounds.
+    """
+    ys, xs = np.where(bw == 1)
+    if len(xs) < 50:
+        return bw, gray
+
+    minx, maxx = int(xs.min()), int(xs.max())
+    miny, maxy = int(ys.min()), int(ys.max())
+
+    # Pad a bit
+    pad = 20
+    minx = max(0, minx - pad)
+    miny = max(0, miny - pad)
+    maxx = min(bw.shape[1] - 1, maxx + pad)
+    maxy = min(bw.shape[0] - 1, maxy + pad)
+
+    bw2 = bw[miny : maxy + 1, minx : maxx + 1]
+    gray2 = gray[miny : maxy + 1, minx : maxx + 1]
+    return bw2, gray2
+
+
 def _remove_small_components(bw: np.ndarray, min_area: int) -> np.ndarray:
     """Remove connected components smaller than min_area."""
     h, w = bw.shape
@@ -296,7 +325,7 @@ def _remove_small_components(bw: np.ndarray, min_area: int) -> np.ndarray:
                 continue
             q = [(x, y)]
             visited[y, x] = 1
-            coords = []
+            coords: list[tuple[int, int]] = []
             while q:
                 cx, cy = q.pop()
                 coords.append((cx, cy))
