@@ -56,15 +56,20 @@ def parse_card_number_from_crop(crop: Image.Image) -> Optional[ParsedNumber]:
 
     arr = np.array(img, dtype=np.uint8)
 
-    # Use a dark threshold (low percentile) to avoid swallowing the background.
-    t = int(np.percentile(arr, 8))
-    bw = (arr <= t).astype(np.uint8)  # 1 for ink
+    # Heuristic ROI: in many templates, the number sits in the *upper-left portion*
+    # of the bottom-corner crop (icons often live to the right).
+    H, W = arr.shape
+    roi = arr[0 : int(H * 0.70), 0 : int(W * 0.80)]
 
-    # Auto-crop around ink (drops icons/background).
-    bw, arr = _autocrop_to_ink(bw, arr)
+    # Use a dark threshold (low percentile) to avoid swallowing the background.
+    t = int(np.percentile(roi, 5))
+    bw = (roi <= t).astype(np.uint8)  # 1 for ink
+
+    # Auto-crop around ink (drops backgrounds).
+    bw, _ = _autocrop_to_ink(bw, roi)
 
     # Remove tiny specks
-    bw = _remove_small_components(bw, min_area=40)
+    bw = _remove_small_components(bw, min_area=25)
 
     boxes = _connected_component_boxes(bw)
     if not boxes:
