@@ -27,7 +27,9 @@ class OCRRegion:
     right_ratio: float
 
 
-NAME_REGION = OCRRegion(top_ratio=0.012, bottom_ratio=0.055, left_ratio=0.08, right_ratio=0.55)
+# The name line varies by template/scan. We try multiple candidate bands near the top.
+NAME_REGION_A = OCRRegion(top_ratio=0.045, bottom_ratio=0.115, left_ratio=0.10, right_ratio=0.72)
+NAME_REGION_B = OCRRegion(top_ratio=0.060, bottom_ratio=0.140, left_ratio=0.08, right_ratio=0.78)
 
 # Card number placement varies by era/template; try both corners.
 CARD_NUMBER_REGION_RIGHT = OCRRegion(top_ratio=0.955, bottom_ratio=1.0, left_ratio=0.72, right_ratio=0.98)
@@ -58,13 +60,15 @@ def extract_card_identity(image: Image.Image) -> CardIdentity:
     
     rgb_image = image.convert('RGB') if image.mode != 'RGB' else image
     
-    name_raw = _extract_region_text(rgb_image, NAME_REGION, TESSERACT_NAME_CONFIG)
+    # Try multiple name regions; choose the best-looking parse.
+    name_raw_a = _extract_region_text(rgb_image, NAME_REGION_A, TESSERACT_NAME_CONFIG)
+    name_raw_b = _extract_region_text(rgb_image, NAME_REGION_B, TESSERACT_NAME_CONFIG)
 
     # Try both bottom corners for the set number/total.
     number_raw_right = _extract_region_text(rgb_image, CARD_NUMBER_REGION_RIGHT, TESSERACT_NUMBER_CONFIG)
     number_raw_left = _extract_region_text(rgb_image, CARD_NUMBER_REGION_LEFT, TESSERACT_NUMBER_CONFIG)
 
-    card_name = _parse_card_name(name_raw)
+    card_name = _best_name(_parse_card_name(name_raw_a), _parse_card_name(name_raw_b))
     card_number = _parse_card_number(number_raw_right) or _parse_card_number(number_raw_left)
     
     confidence = _calculate_confidence(card_name, card_number)
@@ -150,15 +154,29 @@ def _extract_region_text(image: Image.Image, region: OCRRegion, config: str) -> 
         return ""
 
 
+def _best_name(a: str, b: str) -> str:
+    """Choose the better candidate name.
+
+    Heuristic: prefer longer (up to a cap) and more alphabetic density.
+    """
+    def score(s: str) -> float:
+        if not s:
+            return 0.0
+        alpha = sum(1 for ch in s if ch.isalpha())
+        return min(len(s), 30) + (alpha / max(len(s), 1)) * 10.0
+
+    return a if score(a) >= score(b) else b
+
+
 def _parse_card_name(raw_text: str) -> str:
     """Parse card name from OCR text, preserving valid Pokémon name characters."""
     if not raw_text:
         return ""
-    
+
     first_line = raw_text.split('\n')[0].strip()
-    cleaned = re.sub(r'[^A-Za-z\s\'\-é]', '', first_line)
-    cleaned = ' '.join(cleaned.split())
-    
+    cleaned = re.sub(r"[^A-Za-z\s'\-éÉ]", "", first_line)
+    cleaned = " ".join(cleaned.split())
+
     return cleaned
 
 

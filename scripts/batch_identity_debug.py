@@ -26,7 +26,8 @@ if str(REPO_ROOT) not in sys.path:
 from services.card_identity import (
     extract_card_identity_from_path,
     _extract_region_text,
-    NAME_REGION,
+    NAME_REGION_A,
+    NAME_REGION_B,
     CARD_NUMBER_REGION_LEFT,
     CARD_NUMBER_REGION_RIGHT,
     TESSERACT_NAME_CONFIG,
@@ -60,10 +61,12 @@ def main() -> None:
         try:
             img = Image.open(path)
             img.load()
-            name_raw = _extract_region_text(img, NAME_REGION, TESSERACT_NAME_CONFIG)
+            name_raw_a = _extract_region_text(img, NAME_REGION_A, TESSERACT_NAME_CONFIG)
+            name_raw_b = _extract_region_text(img, NAME_REGION_B, TESSERACT_NAME_CONFIG)
             num_r = _extract_region_text(img, CARD_NUMBER_REGION_RIGHT, TESSERACT_NUMBER_CONFIG)
             num_l = _extract_region_text(img, CARD_NUMBER_REGION_LEFT, TESSERACT_NUMBER_CONFIG)
-            print("ocr.name:", repr(name_raw))
+            print("ocr.name.a:", repr(name_raw_a))
+            print("ocr.name.b:", repr(name_raw_b))
             print("ocr.num.right:", repr(num_r))
             print("ocr.num.left:", repr(num_l))
 
@@ -79,7 +82,8 @@ def main() -> None:
                     c = img.crop((left, top, right, bottom))
                     c.save(out_dir / f"{stem}.{suffix}.png")
 
-                crop(NAME_REGION, "name")
+                crop(NAME_REGION_A, "name_a")
+                crop(NAME_REGION_B, "name_b")
                 crop(CARD_NUMBER_REGION_RIGHT, "num_right")
                 crop(CARD_NUMBER_REGION_LEFT, "num_left")
         except Exception as e:
