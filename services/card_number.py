@@ -75,27 +75,32 @@ def parse_card_number_from_crop(crop: Image.Image) -> Optional[ParsedNumber]:
     if not boxes:
         return None
 
-    # Filter to likely glyphs: moderate size, near lower half of ROI.
+    # Filter to likely glyphs: moderate size.
     H2, W2 = bw.shape
     filtered: list[_Box] = []
     for b in boxes:
         if b.h < 10 or b.h > H2 * 0.9:
             continue
-        if b.w < 8 or b.w > W2 * 0.9:
+        if b.w < 8 or b.w > W2 * 0.95:
             continue
         filtered.append(b)
 
-    boxes = filtered
+    # Split any very wide boxes (often multiple glyphs stuck together)
+    split: list[_Box] = []
+    for b in filtered:
+        if b.w > b.h * 2.2:
+            split.extend(_split_wide_box(bw, b))
+        else:
+            split.append(b)
+
+    boxes = sorted(split, key=lambda b: b.x)
     if not boxes:
         return None
-
-    boxes.sort(key=lambda b: b.x)
 
     glyphs: list[np.ndarray] = []
     for b in boxes:
         g = bw[b.y : b.y + b.h, b.x : b.x + b.w]
-        # Skip extremely narrow noise
-        if g.shape[1] < 10:
+        if g.shape[1] < 8:
             continue
         glyphs.append(_render_glyph(g))
 
@@ -254,10 +259,14 @@ def _connected_component_boxes(bw: np.ndarray) -> list[_Box]:
 
             bx = _Box(x=minx, y=miny, w=(maxx - minx + 1), h=(maxy - miny + 1))
 
-            # Filter: exclude huge background blobs
-            if area < 50:
+            # Filter: exclude tiny specks and huge background blobs
+            if area < 30:
                 continue
             if bx.w > w * 0.9 and bx.h > h * 0.9:
+                continue
+
+            # Drop long thin UI bars (common in HUD overlays) — unlikely to be digits.
+            if bx.w > w * 0.45 and bx.h < h * 0.20:
                 continue
 
             boxes.append(bx)
@@ -266,6 +275,58 @@ def _connected_component_boxes(bw: np.ndarray) -> list[_Box]:
     boxes = _merge_close_boxes(boxes)
 
     return boxes
+
+
+def _split_wide_box(bw: np.ndarray, box: _Box) -> list[_Box]:
+    """Split a wide box into multiple boxes using vertical ink projection."""
+    region = bw[box.y : box.y + box.h, box.x : box.x + box.w]
+    proj = region.sum(axis=0)
+
+    # A "gap" is a run of columns with very little ink.
+    gap_thresh = max(1, int(box.h * 0.03))
+    gaps = proj <= gap_thresh
+
+    # Find segments separated by gaps of at least a few pixels.
+    min_gap = max(2, int(box.w * 0.015))
+    min_seg = max(8, int(box.w * 0.03))
+
+    segments: list[tuple[int, int]] = []
+    start = 0
+    i = 0
+    while i < len(gaps):
+        if gaps[i]:
+            j = i
+            while j < len(gaps) and gaps[j]:
+                j += 1
+            # gap from i..j
+            if (j - i) >= min_gap:
+                end = i
+                if (end - start) >= min_seg:
+                    segments.append((start, end))
+                start = j
+            i = j
+        else:
+            i += 1
+
+    if (len(gaps) - start) >= min_seg:
+        segments.append((start, len(gaps)))
+
+    # If we failed to segment, return original.
+    if len(segments) <= 1:
+        return [box]
+
+    out: list[_Box] = []
+    for a, b in segments:
+        # Tighten vertically within each segment
+        seg = region[:, a:b]
+        ys, xs = np.where(seg == 1)
+        if len(xs) < 10:
+            continue
+        minx, maxx = int(xs.min()), int(xs.max())
+        miny, maxy = int(ys.min()), int(ys.max())
+        out.append(_Box(x=box.x + a + minx, y=box.y + miny, w=(maxx - minx + 1), h=(maxy - miny + 1)))
+
+    return out or [box]
 
 
 def _merge_close_boxes(boxes: list[_Box]) -> list[_Box]:
