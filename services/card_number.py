@@ -79,11 +79,9 @@ def parse_card_number_from_crop(crop: Image.Image) -> Optional[ParsedNumber]:
     H2, W2 = bw.shape
     filtered: list[_Box] = []
     for b in boxes:
-        if b.h < 12 or b.h > H2 * 0.8:
+        if b.h < 10 or b.h > H2 * 0.9:
             continue
-        if b.w < 8 or b.w > W2 * 0.8:
-            continue
-        if b.y < int(H2 * 0.25):
+        if b.w < 8 or b.w > W2 * 0.9:
             continue
         filtered.append(b)
 
