@@ -62,7 +62,7 @@ def parse_card_number_from_crop(crop: Image.Image) -> Optional[ParsedNumber]:
     roi = arr[0 : int(H * 0.70), 0 : int(W * 0.80)]
 
     # Use a dark threshold (low percentile) to avoid swallowing the background.
-    t = int(np.percentile(roi, 5))
+    t = int(np.percentile(roi, 3))
     bw = (roi <= t).astype(np.uint8)  # 1 for ink
 
     # Auto-crop around ink (drops backgrounds).
@@ -75,8 +75,19 @@ def parse_card_number_from_crop(crop: Image.Image) -> Optional[ParsedNumber]:
     if not boxes:
         return None
 
-    # Filter to likely text line (exclude very tall/very short)
-    boxes = [b for b in boxes if 20 <= b.h <= 220]
+    # Filter to likely glyphs: moderate size, near lower half of ROI.
+    H2, W2 = bw.shape
+    filtered: list[_Box] = []
+    for b in boxes:
+        if b.h < 12 or b.h > H2 * 0.8:
+            continue
+        if b.w < 8 or b.w > W2 * 0.8:
+            continue
+        if b.y < int(H2 * 0.25):
+            continue
+        filtered.append(b)
+
+    boxes = filtered
     if not boxes:
         return None
 
@@ -260,6 +271,8 @@ def _connected_component_boxes(bw: np.ndarray) -> list[_Box]:
 
 
 def _merge_close_boxes(boxes: list[_Box]) -> list[_Box]:
+    # Conservative merge: keep characters separate unless clearly fragmented.
+
     if not boxes:
         return []
 
@@ -271,7 +284,7 @@ def _merge_close_boxes(boxes: list[_Box]) -> list[_Box]:
         gap = b.x - (cur.x + cur.w)
         vert_overlap = _overlap_ratio((cur.y, cur.y + cur.h), (b.y, b.y + b.h))
 
-        if gap <= 40 and vert_overlap > 0.4:
+        if gap <= 15 and vert_overlap > 0.4:
             # merge
             minx = min(cur.x, b.x)
             miny = min(cur.y, b.y)
