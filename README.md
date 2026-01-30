@@ -63,3 +63,6 @@ Only after identity and gatekeeper behavior are validated should downstream reco
 The full product requirements are captured verbatim in:
 - `docs/prd.md`
 
+API surface documentation (minimal v1 shell):
+- `docs/api.md`
+
