@@ -46,3 +46,6 @@ htmlcov/
 .env
 .env.local
 *.pem
+
+# Local datasets (kept in repo tree for convenience, but not committed)
+data/

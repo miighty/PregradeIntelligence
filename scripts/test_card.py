@@ -22,6 +22,7 @@ __test__ = False
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from services.card_identity import extract_card_identity_from_path
+from services.front_back import predict_front_back
 
 
 def test_image(image_path: str) -> None:
@@ -29,20 +30,30 @@ def test_image(image_path: str) -> None:
     print(f"\n{'='*60}")
     print(f"Image: {image_path}")
     print('='*60)
-    
+
     if not os.path.exists(image_path):
         print(f"ERROR: File not found: {image_path}")
         return
-    
+
+    try:
+        from PIL import Image
+
+        im = Image.open(image_path)
+        im.load()
+        fb = predict_front_back(im)
+        print(f"\nFront/Back:   {fb.label} (conf={fb.confidence:.2f}, method={fb.method})")
+    except Exception as e:
+        print(f"\nFront/Back:   (error: {e})")
+
     result = extract_card_identity_from_path(image_path)
-    
+
     print(f"\nCard Name:    {result.card_name or '(not detected)'}")
     print(f"Set Name:     {result.set_name}")
     print(f"Card Number:  {result.card_number or '(not detected)'}")
     print(f"Variant:      {result.variant or '(none)'}")
     print(f"Confidence:   {result.confidence:.2f}")
     print(f"Match Method: {result.match_method}")
-    
+
     print(f"\nJSON Output:")
     print(json.dumps(result.to_dict(), indent=2))
 

@@ -29,6 +29,9 @@ This repository is **backend-only** and **Lambda-first** for AWS.
 ## Language choice
 
 **Python** is the chosen backend language for this service because it is a strong fit for Lambda-first backends and image analysis workloads:
+
+> Note: some ML wheels (notably `onnxruntime` / `torch`) may lag on the very latest Python versions.
+> If you hit install issues on Python 3.13, use the provided `scripts/bootstrap_venv_py310.sh`.
 - **AWS-native**: first-class Lambda support and a mature AWS SDK ecosystem.
 - **Image ecosystem**: broad, production-tested libraries for image decoding, transforms, and quality checks.
 - **Determinism-friendly**: straightforward to enforce stable ordering, fixed thresholds, and controlled numeric behavior in a service that must be reproducible.

@@ -17,6 +17,7 @@ import numpy as np
 
 from domain.types import CardIdentity
 from services.card_number import parse_card_number_from_crop
+from services.card_enrichment import enrich_identity
 
 
 @dataclass(frozen=True)
@@ -32,9 +33,14 @@ class OCRRegion:
 NAME_REGION_A = OCRRegion(top_ratio=0.045, bottom_ratio=0.115, left_ratio=0.10, right_ratio=0.72)
 NAME_REGION_B = OCRRegion(top_ratio=0.060, bottom_ratio=0.140, left_ratio=0.08, right_ratio=0.78)
 
-# Card number placement varies by era/template; try both corners.
-CARD_NUMBER_REGION_RIGHT = OCRRegion(top_ratio=0.955, bottom_ratio=1.0, left_ratio=0.72, right_ratio=0.98)
-CARD_NUMBER_REGION_LEFT = OCRRegion(top_ratio=0.955, bottom_ratio=1.0, left_ratio=0.02, right_ratio=0.32)
+# Card number placement varies by era/template; try multiple corners/bands.
+# Some scans place number very near the top border (e.g. certain HGSS scans),
+# so we try both top and bottom corners.
+CARD_NUMBER_REGION_BOTTOM_RIGHT = OCRRegion(top_ratio=0.935, bottom_ratio=1.0, left_ratio=0.68, right_ratio=0.99)
+CARD_NUMBER_REGION_BOTTOM_LEFT  = OCRRegion(top_ratio=0.935, bottom_ratio=1.0, left_ratio=0.01, right_ratio=0.35)
+# NOTE: top-right crops should avoid the set symbol (often immediately to the right of the number).
+CARD_NUMBER_REGION_TOP_RIGHT    = OCRRegion(top_ratio=0.00, bottom_ratio=0.12, left_ratio=0.60, right_ratio=0.90)
+CARD_NUMBER_REGION_TOP_LEFT     = OCRRegion(top_ratio=0.00, bottom_ratio=0.12, left_ratio=0.01, right_ratio=0.35)
 
 CARD_NUMBER_PATTERN = re.compile(r'(\d{1,3})\s*/\s*(\d{1,3})')
 TESSERACT_LANG = 'eng'
@@ -70,25 +76,58 @@ def extract_card_identity(image: Image.Image) -> CardIdentity:
 
     card_name = _best_name(_parse_card_name(name_raw_a), _parse_card_name(name_raw_b))
 
-    # Card number: try deterministic template matcher first (more reliable than OCR).
-    number_crop_r = _crop_region(rgb_image, CARD_NUMBER_REGION_RIGHT)
-    number_crop_l = _crop_region(rgb_image, CARD_NUMBER_REGION_LEFT)
+    # Card number: try deterministic template matcher across multiple candidate regions.
+    # Choose the highest-confidence parse.
+    candidate_regions = [
+        ("bottom_right", CARD_NUMBER_REGION_BOTTOM_RIGHT),
+        ("bottom_left", CARD_NUMBER_REGION_BOTTOM_LEFT),
+        ("top_right", CARD_NUMBER_REGION_TOP_RIGHT),
+        ("top_left", CARD_NUMBER_REGION_TOP_LEFT),
+    ]
 
-    parsed_r = parse_card_number_from_crop(number_crop_r)
-    parsed_l = parse_card_number_from_crop(number_crop_l)
+    best_number = None
+    best_conf = -1.0
+    best_region = None
 
-    card_number = (parsed_r.number if parsed_r else None) or (parsed_l.number if parsed_l else None)
+    for label, region in candidate_regions:
+        crop = _crop_region(rgb_image, region)
+
+        # 1) Template matcher (fast) + sanity checks
+        parsed = parse_card_number_from_crop(crop)
+        if parsed and _is_plausible_card_number(parsed.number):
+            if parsed.confidence > best_conf:
+                best_conf = parsed.confidence
+                best_number = parsed.number
+                best_region = label + ":template"
+            continue
+
+        # 2) OCR fallback (more forgiving on certain templates)
+        raw = _ocr_number_text(crop)
+        ocr_num = _parse_card_number(raw)
+        if ocr_num and _is_plausible_card_number(ocr_num):
+            # Assign a modest confidence; template matches should win when sane.
+            if 0.75 > best_conf:
+                best_conf = 0.75
+                best_number = ocr_num
+                best_region = label + ":ocr"
+
+    card_number = best_number
     
     confidence = _calculate_confidence(card_name, card_number)
     
-    return CardIdentity(
+    identity = CardIdentity(
         set_name="Unknown Set",
         card_name=card_name,
         card_number=card_number,
         variant=None,
+        details={},
         confidence=confidence,
-        match_method=f"ocr_extraction:{image_hash[:16]}"
+        match_method=f"ocr_extraction:{image_hash[:16]}:{best_region or 'none'}"
     )
+
+    # Best-effort enrichment (set + structured fields) via TCGdex.
+    # If enrichment fails, the original OCR identity is returned.
+    return enrich_identity(identity)
 
 
 def extract_card_identity_from_bytes(image_bytes: bytes) -> CardIdentity:
@@ -212,17 +251,27 @@ def _parse_card_name(raw_text: str) -> str:
     return " ".join(parts[:2])
 
 
+def _ocr_number_text(crop: Image.Image) -> str:
+    """OCR a crop intended to contain a card number like '136/189'."""
+    try:
+        processed = _preprocess_image(crop)
+        text = pytesseract.image_to_string(processed, lang=TESSERACT_LANG, config=TESSERACT_NUMBER_CONFIG)
+        return (text or "").strip()
+    except Exception:
+        return ""
+
+
 def _parse_card_number(raw_text: str) -> Optional[str]:
     """Parse card number (e.g., '4/102') from OCR text."""
     if not raw_text:
         return None
-    
+
     match = CARD_NUMBER_PATTERN.search(raw_text)
     if match:
         num = match.group(1).lstrip('0') or '0'
         total = match.group(2).lstrip('0') or '0'
         return f"{num}/{total}"
-    
+
     return None
 
 
@@ -257,6 +306,7 @@ def _empty_identity(image_bytes: bytes) -> CardIdentity:
         card_name="",
         card_number=None,
         variant=None,
+        details={},
         confidence=0.0,
         match_method=f"ocr_extraction_failed:{content_hash[:16]}"
     )
@@ -270,6 +320,7 @@ def _empty_identity_from_path(image_path: str) -> CardIdentity:
         card_name="",
         card_number=None,
         variant=None,
+        details={},
         confidence=0.0,
         match_method=f"ocr_extraction_failed:{path_hash[:16]}"
     )
