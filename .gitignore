@@ -55,3 +55,10 @@ dist/
 
 # Local datasets (kept in repo tree for convenience, but not committed)
 data/
+
+# Eval/debug outputs (generated)
+eval/out_crops/
+eval/warp_debug_out/
+# Eval artifacts (CSV outputs)
+eval/*results*.csv
+eval/*confidence*.csv

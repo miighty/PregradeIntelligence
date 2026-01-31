@@ -19,7 +19,7 @@ from typing import Optional, Any
 
 from domain.types import CardIdentity
 from services.pokemon_sets import find_candidate_sets_by_total
-from services.tcgdex_client import get_card_by_set_and_local_id
+from services.identity_lookup import get_card_by_set_and_local_id_cached
 
 
 @dataclass(frozen=True)
@@ -58,7 +58,7 @@ def enrich_identity(identity: CardIdentity) -> CardIdentity:
     norm_ocr = _norm(identity.card_name)
 
     for s in candidates[:40]:
-        card = get_card_by_set_and_local_id(s.set_id, local_id, lang="en")
+        card = get_card_by_set_and_local_id_cached(s.set_id, local_id, lang="en")
         if not card:
             continue
         norm_name = _norm(card.name)

@@ -138,6 +138,9 @@ def main() -> int:
 
         ident = extract_card_identity_from_path(img_path)
         got = as_dict(ident)
+        trace = {}
+        if isinstance(got, dict):
+            trace = (got.get("details") or {}).get("trace") or {}
 
         # Scoring
         score: Dict[str, Optional[bool]] = {
@@ -172,6 +175,9 @@ def main() -> int:
                     "set_name": got.get("set_name"),
                     "confidence": got.get("confidence"),
                     "match_method": got.get("match_method"),
+                    "warp_used": trace.get("warp_used"),
+                    "warp_reason": trace.get("warp_reason"),
+                    "card_number_present": bool(got.get("card_number")),
                 },
                 "score": score,
             }

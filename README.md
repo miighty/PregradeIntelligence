@@ -69,6 +69,33 @@ The full product requirements are captured verbatim in:
 API surface documentation (minimal v1 shell):
 - `docs/api.md`
 
+## Local setup
+
+Install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+Key dependencies:
+- **opencv-python** (`>=4.9.0`): Required for card warp/perspective correction. The service will raise a clear error if missing.
+- **pytesseract** (`>=0.3.10`): OCR for card identity extraction. Requires Tesseract to be installed on your system.
+- **Pillow**, **numpy**: Image processing fundamentals.
+
+## Local evaluation scripts (identity)
+
+Warp debug (overlay quad + warped outputs):
+- `python -m eval.warp_debug --front-dir /path/to/images --out-dir eval/warp_debug --limit 50`
+
+Card number hit-rate (batch + resume):
+- `python -m eval.number_hit_rate_warped --front-dir /path/to/images --batch-size 50 --resume-file eval/number_hit_rate_warped.json`
+
+Identity batch eval (JSON + warp trace):
+- `python -m eval.run_eval --front-dir /path/to/images --json`
+
+Optional debug crops for failed number extraction:
+- `PREGRADE_DEBUG_NUMBER_CROPS=1 python -m eval.number_hit_rate_warped --front-dir /path/to/images`
+
 ## Node/TypeScript gateway (PRD-alignment, staged)
 
 The PRD target includes a Node.js + TypeScript gateway (Fastify/Nest). To avoid a Python→Node big-bang rewrite, a **minimal Fastify TypeScript skeleton** lives in:

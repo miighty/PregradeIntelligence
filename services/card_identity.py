@@ -5,6 +5,7 @@ OCR-based card identity extraction for Pokémon cards.
 Happy path implementation for clean, well-lit card front images.
 """
 
+import os
 import re
 from dataclasses import dataclass
 from typing import Optional
@@ -18,6 +19,7 @@ import numpy as np
 from domain.types import CardIdentity
 from services.card_number import parse_card_number_from_crop
 from services.card_enrichment import enrich_identity
+from services.card_warp import warp_card_best_effort
 
 
 @dataclass(frozen=True)
@@ -29,18 +31,20 @@ class OCRRegion:
     right_ratio: float
 
 
-# The name line varies by template/scan. We try multiple candidate bands near the top.
-NAME_REGION_A = OCRRegion(top_ratio=0.045, bottom_ratio=0.115, left_ratio=0.10, right_ratio=0.72)
-NAME_REGION_B = OCRRegion(top_ratio=0.060, bottom_ratio=0.140, left_ratio=0.08, right_ratio=0.78)
+# The name line varies by template/scan. We use per-template candidate bands.
+NAME_REGION_MODERN_A = OCRRegion(top_ratio=0.040, bottom_ratio=0.115, left_ratio=0.10, right_ratio=0.72)
+NAME_REGION_MODERN_B = OCRRegion(top_ratio=0.055, bottom_ratio=0.140, left_ratio=0.08, right_ratio=0.78)
+NAME_REGION_VINTAGE_A = OCRRegion(top_ratio=0.060, bottom_ratio=0.135, left_ratio=0.12, right_ratio=0.70)
+NAME_REGION_VINTAGE_B = OCRRegion(top_ratio=0.075, bottom_ratio=0.150, left_ratio=0.10, right_ratio=0.74)
+NAME_REGION_SPECIAL_A = OCRRegion(top_ratio=0.050, bottom_ratio=0.150, left_ratio=0.08, right_ratio=0.78)
+NAME_REGION_SPECIAL_B = OCRRegion(top_ratio=0.060, bottom_ratio=0.170, left_ratio=0.06, right_ratio=0.82)
 
-# Card number placement varies by era/template; try multiple corners/bands.
-# Some scans place number very near the top border (e.g. certain HGSS scans),
-# so we try both top and bottom corners.
-CARD_NUMBER_REGION_BOTTOM_RIGHT = OCRRegion(top_ratio=0.935, bottom_ratio=1.0, left_ratio=0.68, right_ratio=0.99)
-CARD_NUMBER_REGION_BOTTOM_LEFT  = OCRRegion(top_ratio=0.935, bottom_ratio=1.0, left_ratio=0.01, right_ratio=0.35)
-# NOTE: top-right crops should avoid the set symbol (often immediately to the right of the number).
-CARD_NUMBER_REGION_TOP_RIGHT    = OCRRegion(top_ratio=0.00, bottom_ratio=0.12, left_ratio=0.60, right_ratio=0.90)
-CARD_NUMBER_REGION_TOP_LEFT     = OCRRegion(top_ratio=0.00, bottom_ratio=0.12, left_ratio=0.01, right_ratio=0.35)
+# Card number placement: bottom-left or bottom-right on the warped card.
+# We use two-pass crops (tight + expanded) per corner.
+CARD_NUMBER_BR_TIGHT = OCRRegion(top_ratio=0.93, bottom_ratio=1.0, left_ratio=0.72, right_ratio=0.98)
+CARD_NUMBER_BR_WIDE = OCRRegion(top_ratio=0.88, bottom_ratio=1.0, left_ratio=0.60, right_ratio=0.99)
+CARD_NUMBER_BL_TIGHT = OCRRegion(top_ratio=0.93, bottom_ratio=1.0, left_ratio=0.02, right_ratio=0.30)
+CARD_NUMBER_BL_WIDE = OCRRegion(top_ratio=0.88, bottom_ratio=1.0, left_ratio=0.01, right_ratio=0.42)
 
 CARD_NUMBER_PATTERN = re.compile(r'(\d{1,3})\s*/\s*(\d{1,3})')
 TESSERACT_LANG = 'eng'
@@ -69,60 +73,118 @@ def extract_card_identity(image: Image.Image) -> CardIdentity:
     image_hash = _compute_image_hash(image)
     
     rgb_image = image.convert('RGB') if image.mode != 'RGB' else image
-    
-    # Try multiple name regions; choose the best-looking parse.
-    name_raw_a = _extract_region_text(rgb_image, NAME_REGION_A, TESSERACT_NAME_CONFIG)
-    name_raw_b = _extract_region_text(rgb_image, NAME_REGION_B, TESSERACT_NAME_CONFIG)
+    warped_image, warp_used, warp_reason, warp_debug = warp_card_best_effort(rgb_image)
 
-    card_name = _best_name(_parse_card_name(name_raw_a), _parse_card_name(name_raw_b))
+    working_image = warped_image
+    
+    template_family = _detect_template_family(working_image)
+    name_regions = _name_regions_for_family(template_family)
+    name_candidates: list[str] = []
+    for region in name_regions:
+        raw = _extract_region_text(working_image, region, TESSERACT_NAME_CONFIG)
+        name_candidates.append(_parse_card_name(raw))
+
+    card_name = _best_name_from_list(name_candidates)
 
     # Card number: try deterministic template matcher across multiple candidate regions.
     # Choose the highest-confidence parse.
+    # Rule: card number is always present in a bottom corner (bottom-right or bottom-left).
+    # We prioritise those corners first for reliability.
     candidate_regions = [
-        ("bottom_right", CARD_NUMBER_REGION_BOTTOM_RIGHT),
-        ("bottom_left", CARD_NUMBER_REGION_BOTTOM_LEFT),
-        ("top_right", CARD_NUMBER_REGION_TOP_RIGHT),
-        ("top_left", CARD_NUMBER_REGION_TOP_LEFT),
+        ("bottom_right:tight", CARD_NUMBER_BR_TIGHT),
+        ("bottom_right:wide", CARD_NUMBER_BR_WIDE),
+        ("bottom_left:tight", CARD_NUMBER_BL_TIGHT),
+        ("bottom_left:wide", CARD_NUMBER_BL_WIDE),
     ]
 
     best_number = None
     best_conf = -1.0
     best_region = None
+    number_candidates: list[dict[str, str | float | bool]] = []
 
     for label, region in candidate_regions:
-        crop = _crop_region(rgb_image, region)
+        crop = _crop_region(working_image, region)
 
         # 1) Template matcher (fast) + sanity checks
         parsed = parse_card_number_from_crop(crop)
         if parsed and _is_plausible_card_number(parsed.number):
+            number_candidates.append(
+                {
+                    "region": label,
+                    "method": "template",
+                    "value": parsed.number,
+                    "confidence": parsed.confidence,
+                    "valid": True,
+                }
+            )
             if parsed.confidence > best_conf:
                 best_conf = parsed.confidence
                 best_number = parsed.number
                 best_region = label + ":template"
             continue
+        elif parsed:
+            number_candidates.append(
+                {
+                    "region": label,
+                    "method": "template",
+                    "value": parsed.number,
+                    "confidence": parsed.confidence,
+                    "valid": False,
+                }
+            )
 
         # 2) OCR fallback (more forgiving on certain templates)
         raw = _ocr_number_text(crop)
         ocr_num = _parse_card_number(raw)
         if ocr_num and _is_plausible_card_number(ocr_num):
+            number_candidates.append(
+                {
+                    "region": label,
+                    "method": "ocr",
+                    "value": ocr_num,
+                    "confidence": 0.75,
+                    "valid": True,
+                }
+            )
             # Assign a modest confidence; template matches should win when sane.
             if 0.75 > best_conf:
                 best_conf = 0.75
                 best_number = ocr_num
                 best_region = label + ":ocr"
+        elif ocr_num:
+            number_candidates.append(
+                {
+                    "region": label,
+                    "method": "ocr",
+                    "value": ocr_num,
+                    "confidence": 0.5,
+                    "valid": False,
+                }
+            )
 
     card_number = best_number
     
+    if card_number is None and _debug_number_crops_enabled():
+        _dump_number_crops(working_image, image_hash, candidate_regions)
+
     confidence = _calculate_confidence(card_name, card_number)
+    trace = {
+        "warp_used": warp_used,
+        "warp_reason": warp_reason,
+        "warp_debug": warp_debug,
+        "template_family": template_family,
+        "number_candidates": number_candidates,
+        "number_region_selected": best_region or "none",
+    }
     
     identity = CardIdentity(
         set_name="Unknown Set",
         card_name=card_name,
         card_number=card_number,
         variant=None,
-        details={},
+        details={"trace": trace},
         confidence=confidence,
-        match_method=f"ocr_extraction:{image_hash[:16]}:{best_region or 'none'}"
+        match_method=f"ocr_extraction:{image_hash[:16]}:{best_region or 'none'}:{warp_reason}"
     )
 
     # Best-effort enrichment (set + structured fields) via TCGdex.
@@ -217,6 +279,13 @@ def _best_name(a: str, b: str) -> str:
     return a if score(a) >= score(b) else b
 
 
+def _best_name_from_list(candidates: list[str]) -> str:
+    best = ""
+    for c in candidates:
+        best = _best_name(best, c)
+    return best
+
+
 def _parse_card_name(raw_text: str) -> str:
     """Parse card name from OCR text.
 
@@ -273,6 +342,89 @@ def _parse_card_number(raw_text: str) -> Optional[str]:
         return f"{num}/{total}"
 
     return None
+
+
+def _is_plausible_card_number(card_number: str) -> bool:
+    if not card_number:
+        return False
+    m = CARD_NUMBER_PATTERN.search(card_number)
+    if not m:
+        return False
+    try:
+        num = int(m.group(1))
+        total = int(m.group(2))
+    except ValueError:
+        return False
+    if num <= 0 or total <= 0:
+        return False
+    # Reject obviously invalid totals (even small promo sets have 10+ cards)
+    if total < 10:
+        return False
+    if total > 500:
+        return False
+    # Secret rares can exceed total; allow a reasonable margin.
+    if num > total + 150:
+        return False
+    return True
+
+
+def _detect_template_family(image: Image.Image) -> str:
+    """Heuristic template family detection for name band placement."""
+    arr = np.array(image.convert("RGB"), dtype=np.uint8)
+    h, w, _ = arr.shape
+    if h < 10 or w < 10:
+        return "modern"
+
+    border = int(min(h, w) * 0.03)
+    border = max(border, 1)
+
+    top = arr[:border, :, :]
+    bottom = arr[-border:, :, :]
+    left = arr[:, :border, :]
+    right = arr[:, -border:, :]
+    border_pixels = np.concatenate([top.reshape(-1, 3), bottom.reshape(-1, 3), left.reshape(-1, 3), right.reshape(-1, 3)], axis=0)
+
+    mean = border_pixels.mean(axis=0)
+    std = border_pixels.std(axis=0)
+
+    # Vintage WOTC cards have a uniform yellow border.
+    if std.mean() < 25 and mean[0] > 170 and mean[1] > 150 and mean[2] < 120:
+        return "vintage"
+
+    # Full art / special cards have high border variance.
+    if std.mean() > 45:
+        return "special"
+
+    return "modern"
+
+
+def _name_regions_for_family(family: str) -> list[OCRRegion]:
+    if family == "vintage":
+        return [NAME_REGION_VINTAGE_A, NAME_REGION_VINTAGE_B]
+    if family == "special":
+        return [NAME_REGION_SPECIAL_A, NAME_REGION_SPECIAL_B]
+    return [NAME_REGION_MODERN_A, NAME_REGION_MODERN_B]
+
+
+def _debug_number_crops_enabled() -> bool:
+    return os.environ.get("PREGRADE_DEBUG_NUMBER_CROPS", "").strip().lower() in {"1", "true", "yes"}
+
+
+def _dump_number_crops(image: Image.Image, image_hash: str, regions: list[tuple[str, OCRRegion]]) -> None:
+    out_dir = os.environ.get("PREGRADE_DEBUG_NUMBER_DIR", "eval/out_crops")
+    try:
+        os.makedirs(out_dir, exist_ok=True)
+    except Exception:
+        return
+
+    for label, region in regions:
+        crop = _crop_region(image, region)
+        filename = f"{image_hash[:12]}__{label.replace(':', '_')}.png"
+        path = os.path.join(out_dir, filename)
+        try:
+            crop.save(path)
+        except Exception:
+            continue
 
 
 def _calculate_confidence(card_name: str, card_number: Optional[str]) -> float:

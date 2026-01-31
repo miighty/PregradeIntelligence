@@ -56,11 +56,35 @@ def parse_card_number_from_crop(crop: Image.Image) -> Optional[ParsedNumber]:
 
     arr = np.array(img, dtype=np.uint8)
 
-    # Heuristic ROI: in many templates, the number sits in the *upper-left portion*
-    # of the bottom-corner crop (icons often live to the right).
+    # Try multiple ROI strategies since number placement varies by card template.
+    # Strategy 1: Full image (for warped cards where number fills the crop)
+    # Strategy 2: Bottom portion (for crops that include extra content above)
+    # Strategy 3: Top-left (original heuristic for scans with icons on right)
     H, W = arr.shape
-    roi = arr[0 : int(H * 0.70), 0 : int(W * 0.80)]
+    
+    roi_strategies = [
+        ("full", arr),
+        ("bottom_half", arr[int(H * 0.5):, :]),
+        ("top_left", arr[0 : int(H * 0.70), 0 : int(W * 0.80)]),
+    ]
+    
+    best_result: Optional[ParsedNumber] = None
+    best_conf = -1.0
+    
+    for roi_name, roi in roi_strategies:
+        result = _try_parse_roi(roi)
+        if result and result.confidence > best_conf:
+            best_conf = result.confidence
+            best_result = result
+    
+    return best_result
 
+
+def _try_parse_roi(roi: np.ndarray) -> Optional[ParsedNumber]:
+    """Try to parse a card number from a single ROI."""
+    if roi.size == 0:
+        return None
+    
     # Use a dark threshold (low percentile) to avoid swallowing the background.
     t = int(np.percentile(roi, 3))
     bw = (roi <= t).astype(np.uint8)  # 1 for ink
@@ -107,7 +131,7 @@ def parse_card_number_from_crop(crop: Image.Image) -> Optional[ParsedNumber]:
     if not glyphs:
         return None
 
-    templates = _build_templates()
+    templates = _get_templates()
 
     chars: list[str] = []
     scores: list[float] = []
@@ -193,6 +217,16 @@ def _match_template(g: np.ndarray, templates: dict[str, list[np.ndarray]]) -> tu
         return None, 0.0
 
     return best_ch, float(best_score)
+
+
+_TEMPLATES: Optional[dict[str, list[np.ndarray]]] = None
+
+
+def _get_templates() -> dict[str, list[np.ndarray]]:
+    global _TEMPLATES
+    if _TEMPLATES is None:
+        _TEMPLATES = _build_templates()
+    return _TEMPLATES
 
 
 def _build_templates() -> dict[str, list[np.ndarray]]:
