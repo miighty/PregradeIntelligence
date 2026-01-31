@@ -69,3 +69,12 @@ The full product requirements are captured verbatim in:
 API surface documentation (minimal v1 shell):
 - `docs/api.md`
 
+## Node/TypeScript gateway (PRD-alignment, staged)
+
+The PRD target includes a Node.js + TypeScript gateway (Fastify/Nest). To avoid a Python→Node big-bang rewrite, a **minimal Fastify TypeScript skeleton** lives in:
+
+- `gateway-node/`
+
+It currently exposes `/v1/health` and a contract-shaped stub for `/v1/analyze` (returns `501`), plus API key + rate limit scaffolding.
+The Python Lambda handler under `api/handler.py` remains the current source of truth.
+
