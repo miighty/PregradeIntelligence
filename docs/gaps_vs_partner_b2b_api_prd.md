@@ -28,7 +28,9 @@ This repository today is:
 
 ### API / routing
 - PRD target: Node/TS API gateway with strict `/v1` routing
-- Repo current: Python handler now provides `/v1/health` + `/v1/analyze` (no Node gateway yet)
+- Repo current:
+  - Python handler provides `/v1/health` + `/v1/analyze`
+  - Node gateway skeleton added in `gateway-node/` (Fastify + `/v1/*`), currently stubbed (no proxy/invoke yet)
 
 ### Authentication + rate limiting
 - PRD target: API key auth + rate limiting (likely at gateway level)
