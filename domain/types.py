@@ -9,7 +9,7 @@ PreGrade does NOT assign grades or act as an authority.
 """
 
 from dataclasses import dataclass, field, asdict
-from typing import Optional
+from typing import Optional, Any
 import json
 
 
@@ -33,12 +33,15 @@ class CardIdentity:
     
     variant: Optional[str]
     """Card variant if applicable (e.g., 'Holo', 'Reverse Holo', '1st Edition')."""
-    
+
     confidence: float
     """Confidence score for this identification (0.0 to 1.0)."""
     
     match_method: str
     """Description of how the card was identified (for traceability)."""
+
+    details: dict[str, Any] = field(default_factory=dict)
+    """Extra structured details about the card (set id, rarity, types, etc.)."""
 
     def to_dict(self) -> dict:
         """Convert to JSON-serialisable dictionary."""

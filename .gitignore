@@ -46,3 +46,20 @@ htmlcov/
 .env
 .env.local
 *.pem
+
+# Node
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+
+# Local datasets (kept in repo tree for convenience, but not committed)
+data/
+
+# Eval/debug outputs (generated)
+eval/out_crops/
+eval/warp_debug_out/
+exports/
+# Eval artifacts (CSV outputs)
+eval/*results*.csv
+eval/*confidence*.csv

@@ -29,6 +29,9 @@ This repository is **backend-only** and **Lambda-first** for AWS.
 ## Language choice
 
 **Python** is the chosen backend language for this service because it is a strong fit for Lambda-first backends and image analysis workloads:
+
+> Note: some ML wheels (notably `onnxruntime` / `torch`) may lag on the very latest Python versions.
+> If you hit install issues on Python 3.13, use the provided `scripts/bootstrap_venv_py310.sh`.
 - **AWS-native**: first-class Lambda support and a mature AWS SDK ecosystem.
 - **Image ecosystem**: broad, production-tested libraries for image decoding, transforms, and quality checks.
 - **Determinism-friendly**: straightforward to enforce stable ordering, fixed thresholds, and controlled numeric behavior in a service that must be reproducible.
@@ -62,4 +65,43 @@ Only after identity and gatekeeper behavior are validated should downstream reco
 
 The full product requirements are captured verbatim in:
 - `docs/prd.md`
+
+API surface documentation (minimal v1 shell):
+- `docs/api.md`
+
+## Local setup
+
+Install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+Key dependencies:
+- **opencv-python** (`>=4.9.0`): Required for card warp/perspective correction. The service will raise a clear error if missing.
+- **pytesseract** (`>=0.3.10`): OCR for card identity extraction. Requires Tesseract to be installed on your system.
+- **Pillow**, **numpy**: Image processing fundamentals.
+
+## Local evaluation scripts (identity)
+
+Warp debug (overlay quad + warped outputs):
+- `python -m eval.warp_debug --front-dir /path/to/images --out-dir eval/warp_debug --limit 50`
+
+Card number hit-rate (batch + resume):
+- `python -m eval.number_hit_rate_warped --front-dir /path/to/images --batch-size 50 --resume-file eval/number_hit_rate_warped.json`
+
+Identity batch eval (JSON + warp trace):
+- `python -m eval.run_eval --front-dir /path/to/images --json`
+
+Optional debug crops for failed number extraction:
+- `PREGRADE_DEBUG_NUMBER_CROPS=1 python -m eval.number_hit_rate_warped --front-dir /path/to/images`
+
+## Node/TypeScript gateway (PRD-alignment, staged)
+
+The PRD target includes a Node.js + TypeScript gateway (Fastify/Nest). To avoid a Python→Node big-bang rewrite, a **minimal Fastify TypeScript skeleton** lives in:
+
+- `gateway-node/`
+
+It currently exposes `/v1/health` and a contract-shaped stub for `/v1/analyze` (returns `501`), plus API key + rate limit scaffolding.
+The Python Lambda handler under `api/handler.py` remains the current source of truth.
 
