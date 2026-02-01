@@ -5,6 +5,7 @@ Implements a minimal, PRD-aligned surface without introducing a framework.
 Routes:
 - GET  /v1/health
 - POST /v1/analyze
+- POST /v1/grade
 
 Auth:
 - API keys via X-API-Key header (optional in dev, enforced when configured)
@@ -26,8 +27,10 @@ from typing import Any, Optional
 
 from api.http import decode_json_body, get_header, response, content_hash_str, content_hash_bytes
 from api.schemas import ErrorCode, ErrorResponse, AnalyzeResponse
+from api.schemas_grade import GradeResponse
 from domain.types import AnalysisResult, GatekeeperResult, ROIResult
 from services.card_identity import extract_card_identity_from_bytes
+from api.handler_grade import handle_grade
 
 
 _API_VERSION = "1.0"
@@ -160,6 +163,9 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
     if method == "POST" and path == "/v1/analyze":
         return _handle_analyze(event)
+
+    if method == "POST" and path == "/v1/grade":
+        return handle_grade(event)
 
     err = ErrorResponse(
         api_version=_API_VERSION,
