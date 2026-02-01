@@ -14,14 +14,23 @@ function requireApiKey(): boolean {
   return configuredApiKeys().length > 0;
 }
 
-const rateState = new Map<string, { windowEpochMinute: number; count: number }>();
+type RateState = { windowEpochMinute: number; count: number };
+const rateState = new Map<string, RateState>();
+
+function pathOnly(url: string): string {
+  const idx = url.indexOf('?');
+  return idx === -1 ? url : url.slice(0, idx);
+}
 
 export function authAndRateLimit(options?: { exemptPaths?: string[] }) {
-  const exempt = new Set(options?.exemptPaths ?? []);
+  // Treat these as prefixes to make it easy to exempt things like /docs/*.
+  const exemptPrefixes = (options?.exemptPaths ?? []).map((p) => p.trim()).filter(Boolean);
 
   return async function preHandler(req: FastifyRequest, reply: FastifyReply) {
-    if (exempt.has(req.url)) return;
+    const path = pathOnly(req.url);
+    if (exemptPrefixes.some((p) => path === p || path.startsWith(p + '/'))) return;
 
+    // Auth
     if (requireApiKey()) {
       const apiKey = req.headers['x-api-key'];
       const apiKeyStr = Array.isArray(apiKey) ? apiKey[0] : apiKey;
@@ -29,7 +38,7 @@ export function authAndRateLimit(options?: { exemptPaths?: string[] }) {
       if (!apiKeyStr) {
         const err: ErrorResponse = {
           api_version: API_VERSION,
-          request_id: null,
+          request_id: (req as any).requestId ?? null,
           error_code: ErrorCode.MISSING_API_KEY,
           error_message: 'Missing API key. Provide X-API-Key header.'
         };
@@ -40,7 +49,7 @@ export function authAndRateLimit(options?: { exemptPaths?: string[] }) {
       if (!keys.includes(apiKeyStr)) {
         const err: ErrorResponse = {
           api_version: API_VERSION,
-          request_id: null,
+          request_id: (req as any).requestId ?? null,
           error_code: ErrorCode.INVALID_API_KEY,
           error_message: 'Invalid API key.'
         };
@@ -48,6 +57,7 @@ export function authAndRateLimit(options?: { exemptPaths?: string[] }) {
       }
     }
 
+    // Rate limiting (simple in-memory per minute; good enough for local dev + smoke tests)
     const rawLimit = (process.env.PREGRADE_RATE_LIMIT_PER_MIN ?? '').trim();
     if (!rawLimit) return;
 
@@ -60,15 +70,18 @@ export function authAndRateLimit(options?: { exemptPaths?: string[] }) {
     const nowMinute = Math.floor(Date.now() / 1000 / 60);
     const prev = rateState.get(apiKey);
 
-    const current =
-      prev && prev.windowEpochMinute === nowMinute
-        ? prev
-        : { windowEpochMinute: nowMinute, count: 0 };
+    const current: RateState =
+      prev && prev.windowEpochMinute === nowMinute ? prev : { windowEpochMinute: nowMinute, count: 0 };
+
+    const remaining = Math.max(0, limit - current.count);
+    reply.header('x-ratelimit-limit', String(limit));
+    reply.header('x-ratelimit-remaining', String(remaining));
+    reply.header('x-ratelimit-reset', String((nowMinute + 1) * 60));
 
     if (current.count >= limit) {
       const err: ErrorResponse = {
         api_version: API_VERSION,
-        request_id: null,
+        request_id: (req as any).requestId ?? null,
         error_code: ErrorCode.RATE_LIMIT_EXCEEDED,
         error_message: 'Rate limit exceeded.'
       };
