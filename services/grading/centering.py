@@ -218,12 +218,24 @@ def measure_centering(front: Image.Image, back: Image.Image) -> CenteringMeasure
         front_lr, front_tb = _lr_tb_from_rect(fw, fh, front_rect)
         details["front_detected"] = True
 
-    # Back: if no rect, try pokeball center
-    if back_rect is not None:
+    def _rect_valid(rect: tuple[int, int, int, int]) -> bool:
+        x, y, w, h = rect
+        if w <= 0 or h <= 0:
+            return False
+        if x < 0 or y < 0:
+            return False
+        if (x + w) > fw or (y + h) > fh:
+            return False
+        return True
+
+    # Back: prefer inner rect if it is valid; otherwise fall back to pokeball.
+    if back_rect is not None and _rect_valid(back_rect):
         back_lr, back_tb = _lr_tb_from_rect(fw, fh, back_rect)
         details["back_detected"] = True
         details["back_method"] = "inner_rect"
     else:
+        if back_rect is not None and not _rect_valid(back_rect):
+            details["back_inner_rect_invalid"] = True
         pb = _detect_pokeball_center(back_rgb)
         details["back_pokeball"] = pb
         if pb is not None:
