@@ -20,6 +20,7 @@ from domain.types import CardIdentity
 from services.card_number import parse_card_number_from_crop
 from services.card_enrichment import enrich_identity
 from services.card_warp import warp_card_best_effort
+from services.card_identity_wotc import wotc_number_fallback
 
 
 @dataclass(frozen=True)
@@ -163,9 +164,25 @@ def extract_card_identity(image: Image.Image) -> CardIdentity:
             )
 
     card_number = best_number
-    
+
     if card_number is None and _debug_number_crops_enabled():
         _dump_number_crops(working_image, image_hash, candidate_regions)
+
+    # WOTC/vintage fallback: focus on bottom-right number and try rotation sweep OCR.
+    if card_number is None:
+        wotc_num, wotc_meta = wotc_number_fallback(working_image)
+        if wotc_num:
+            card_number = wotc_num
+            best_region = "wotc_fallback"
+            number_candidates.append(
+                {
+                    "region": "bottom_right:wotc_fallback",
+                    "method": "wotc_ocr",
+                    "value": wotc_num,
+                    "confidence": float(wotc_meta.get("confidence", 0.6)),
+                    "valid": True,
+                }
+            )
 
     confidence = _calculate_confidence(card_name, card_number)
     trace = {
@@ -357,8 +374,10 @@ def _is_plausible_card_number(card_number: str) -> bool:
         return False
     if num <= 0 or total <= 0:
         return False
-    # Reject obviously invalid totals (even small promo sets have 10+ cards)
-    if total < 10:
+    # Reject obviously invalid totals (WOTC/mainline sets are typically much larger)
+    # Note: promo subsets can be smaller, but for our current WOTC-first pipeline
+    # we treat totals < 20 as not plausible.
+    if total < 20:
         return False
     if total > 500:
         return False

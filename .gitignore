@@ -59,6 +59,7 @@ data/
 # Eval/debug outputs (generated)
 eval/out_crops/
 eval/warp_debug_out/
+exports/
 # Eval artifacts (CSV outputs)
 eval/*results*.csv
 eval/*confidence*.csv
