@@ -91,6 +91,8 @@ def grade_card(front: Image.Image, back: Image.Image) -> GradeResult:
         cent.front_lr,
         cent.front_tb,
         title="Front centering",
+        warp_used=cent.details.get("front_warp_used"),
+        warp_reason=cent.details.get("front_warp_reason"),
     )
     back_overlay = render_centering_overlay(
         cb.image,
@@ -99,6 +101,8 @@ def grade_card(front: Image.Image, back: Image.Image) -> GradeResult:
         cent.back_tb,
         title=f"Back centering ({cent.details.get('back_method')})",
         pokeball=cent.details.get("back_pokeball"),
+        warp_used=cent.details.get("back_warp_used"),
+        warp_reason=cent.details.get("back_warp_reason"),
     )
 
     # We return images in-memory; API layer decides storage/encoding.

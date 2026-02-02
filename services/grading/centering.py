@@ -30,6 +30,7 @@ except ImportError as e:
     ) from e
 
 from services.grading.centering_rules import psa_max_grade_by_centering
+from services.card_warp import warp_card_best_effort
 
 
 @dataclass(frozen=True)
@@ -209,9 +210,23 @@ def _detect_pokeball_center(rgb: np.ndarray) -> Optional[tuple[float, float, flo
     return best
 
 
+def _rect_area_ratio(rect: Optional[tuple[int, int, int, int]], w: int, h: int) -> float:
+    if rect is None:
+        return 0.0
+    x, y, rw, rh = rect
+    if rw <= 0 or rh <= 0:
+        return 0.0
+    return float(rw * rh) / float(w * h)
+
+
 def measure_centering(front: Image.Image, back: Image.Image) -> CenteringMeasurement:
-    front_rgb = np.array(front.convert("RGB"))
-    back_rgb = np.array(back.convert("RGB"))
+    # Re-warp inside centering as a robustness layer.
+    # This reduces the need for the user to tightly frame/zoom the card.
+    f_warped, f_warp_used, f_warp_reason, _ = warp_card_best_effort(front.convert("RGB"))
+    b_warped, b_warp_used, b_warp_reason, _ = warp_card_best_effort(back.convert("RGB"))
+
+    front_rgb = np.array(f_warped.convert("RGB"))
+    back_rgb = np.array(b_warped.convert("RGB"))
 
     fh, fw = front_rgb.shape[:2]
 
@@ -219,8 +234,14 @@ def measure_centering(front: Image.Image, back: Image.Image) -> CenteringMeasure
     back_rect = _find_inner_artwork_rect(back_rgb)
 
     details: dict[str, Any] = {
+        "front_warp_used": f_warp_used,
+        "front_warp_reason": f_warp_reason,
+        "back_warp_used": b_warp_used,
+        "back_warp_reason": b_warp_reason,
         "front_inner_rect": front_rect,
         "back_inner_rect": back_rect,
+        "front_inner_rect_area_ratio": _rect_area_ratio(front_rect, fw, fh),
+        "back_inner_rect_area_ratio": _rect_area_ratio(back_rect, fw, fh),
         "back_pokeball": None,
         "back_method": None,
     }
@@ -235,6 +256,11 @@ def measure_centering(front: Image.Image, back: Image.Image) -> CenteringMeasure
         front_lr, front_tb = _lr_tb_from_rect(fw, fh, front_rect)
         details["front_detected"] = True
         details["front_method"] = "inner_rect"
+
+        # Reliability checks: if the detected rect is suspicious (too big/small), treat as unreliable.
+        ar = details.get("front_inner_rect_area_ratio", 0.0)
+        if ar < 0.10 or ar > 0.85:
+            details["front_centering_unreliable"] = True
 
     def _rect_valid(rect: tuple[int, int, int, int]) -> bool:
         x, y, w, h = rect
@@ -268,9 +294,10 @@ def measure_centering(front: Image.Image, back: Image.Image) -> CenteringMeasure
 
     psa_max = psa_max_grade_by_centering(front_lr, front_tb, back_lr, back_tb)
 
-    # If we failed to detect the front inner frame, we cannot score centering reliably.
+    # If we failed to detect the front inner frame (or detection is flagged unreliable),
+    # we cannot score centering reliably.
     # Be conservative: cap to PSA 8 (still allows good cards but prevents fake PSA10 inflation).
-    if not details.get("front_detected", False):
+    if (not details.get("front_detected", False)) or details.get("front_centering_unreliable", False):
         psa_max = min(psa_max, 8)
         details["front_centering_unreliable"] = True
 
@@ -291,6 +318,8 @@ def render_centering_overlay(
     tb: tuple[float, float],
     title: str,
     pokeball: Optional[tuple[float, float, float]] = None,
+    warp_used: Optional[bool] = None,
+    warp_reason: Optional[str] = None,
 ) -> Image.Image:
     out = image.convert("RGB").copy()
     draw = ImageDraw.Draw(out)
@@ -317,10 +346,15 @@ def render_centering_overlay(
         draw.line([0, cy, w, cy], fill=(0, 200, 255), width=2)
 
     # Text
+    warp_line = ""
+    if warp_used is not None:
+        warp_line = f"\nwarp: {'yes' if warp_used else 'no'} ({warp_reason or ''})"
+
     text = (
         f"{title}\n"
         f"LR: {lr[0]:.1f}/{lr[1]:.1f} (max side {max(lr):.1f})\n"
         f"TB: {tb[0]:.1f}/{tb[1]:.1f} (max side {max(tb):.1f})"
+        f"{warp_line}"
     )
 
     # Use default font (no dependency)
