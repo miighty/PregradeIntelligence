@@ -40,6 +40,11 @@ curl -s -X POST http://127.0.0.1:3000/v1/analyze \
   -H 'content-type: application/json' \
   -H 'x-api-key: dev_key' \
   -d '{"card_type":"pokemon","front_image":{"encoding":"base64","data":"AAAA"}}'
+
+curl -s -X POST http://127.0.0.1:3000/v1/grade \
+  -H 'content-type: application/json' \
+  -H 'x-api-key: dev_key' \
+  -d '{"card_type":"pokemon","front_image":{"encoding":"base64","data":"AAAA"}}'
 ```
 
 ## Next steps

@@ -102,6 +102,6 @@ The PRD target includes a Node.js + TypeScript gateway (Fastify/Nest). To avoid 
 
 - `gateway-node/`
 
-It currently exposes `/v1/health` and a contract-shaped stub for `/v1/analyze` (returns `501`), plus API key + rate limit scaffolding.
+It currently exposes `/v1/health` plus contract-shaped stubs for `/v1/analyze` and `/v1/grade` (both return `501`), plus API key + rate limit scaffolding.
 The Python Lambda handler under `api/handler.py` remains the current source of truth.
 
