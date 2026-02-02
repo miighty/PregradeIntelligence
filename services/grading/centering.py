@@ -44,65 +44,80 @@ class CenteringMeasurement:
 
 
 def _find_inner_artwork_rect(rgb: np.ndarray) -> Optional[tuple[int, int, int, int]]:
-    """Return x,y,w,h of inner artwork rect, or None."""
-    # Work in grayscale
+    """Return x,y,w,h of inner artwork rect, or None.
+
+    We run a small multi-pass strategy because phone photos vary wildly.
+    """
+
     gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
-
-    # Reduce noise
-    blur = cv2.GaussianBlur(gray, (5, 5), 0)
-
-    # Edge detect
-    edges = cv2.Canny(blur, 50, 150)
-
-    # Morph close to connect
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-    closed = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel)
-
-    contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours:
+    H, W = gray.shape
+    if H < 10 or W < 10:
         return None
 
-    H, W = gray.shape
     image_area = float(H * W)
 
+    # Try a few preprocessing + Canny thresholds.
+    # (low, high, blur_ksize, morph_ksize)
+    passes = [
+        (40, 130, 5, 5),
+        (50, 150, 5, 5),
+        (60, 180, 5, 7),
+        (40, 120, 7, 7),
+    ]
+
     best = None
-    best_score = -1.0
+    best_score = -1e9
 
-    for cnt in contours:
-        area = float(cv2.contourArea(cnt))
-        if area < image_area * 0.05:
+    for low, high, blur_k, morph_k in passes:
+        blur = cv2.GaussianBlur(gray, (blur_k, blur_k), 0)
+        edges = cv2.Canny(blur, low, high)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (morph_k, morph_k))
+        closed = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel)
+
+        contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
             continue
 
-        rect = cv2.minAreaRect(cnt)
-        (cx, cy), (rw, rh), angle = rect
-        rw, rh = float(rw), float(rh)
-        if rw <= 0 or rh <= 0:
-            continue
+        for cnt in contours:
+            area = float(cv2.contourArea(cnt))
+            if area < image_area * 0.03:
+                continue
 
-        # Aspect should be reasonably rectangular (art box is wide-ish)
-        aspect = min(rw / rh, rh / rw)
-        if aspect < 0.55:
-            continue
+            rect = cv2.minAreaRect(cnt)
+            (cx, cy), (rw, rh), angle = rect
+            rw, rh = float(rw), float(rh)
+            if rw <= 0 or rh <= 0:
+                continue
 
-        # Prefer mid-large boxes not touching the border.
-        box = cv2.boxPoints(rect).astype(np.int32)
-        x, y, w, h = cv2.boundingRect(box)
+            # Aspect should be reasonably rectangular.
+            aspect = min(rw / rh, rh / rw)
+            if aspect < 0.45:
+                continue
 
-        # Reject boxes that are basically the whole card
-        area_ratio = (w * h) / image_area
-        if area_ratio > 0.9:
-            continue
+            box = cv2.boxPoints(rect).astype(np.int32)
+            x, y, w, h = cv2.boundingRect(box)
 
-        # Penalize proximity to edges (inner artwork should have margins)
-        edge_pen = 0.0
-        pad = int(min(H, W) * 0.02)
-        if x < pad or y < pad or (x + w) > (W - pad) or (y + h) > (H - pad):
-            edge_pen = 0.2
+            area_ratio = (w * h) / image_area
+            # Inner content should not be the whole card.
+            if area_ratio > 0.92:
+                continue
 
-        score = area_ratio - edge_pen
-        if score > best_score:
-            best_score = score
-            best = (x, y, w, h)
+            # Penalize proximity to edges (inner artwork should have margins)
+            pad = int(min(H, W) * 0.015)
+            edge_pen = 0.0
+            if x < pad or y < pad or (x + w) > (W - pad) or (y + h) > (H - pad):
+                edge_pen = 0.25
+
+            # Prefer boxes that are medium-large (typical inner frame on fronts)
+            # and not extremely thin.
+            thin_pen = 0.0
+            if w < W * 0.25 or h < H * 0.25:
+                thin_pen = 0.35
+
+            score = area_ratio - edge_pen - thin_pen
+            if score > best_score:
+                best_score = score
+                best = (x, y, w, h)
 
     return best
 
@@ -210,13 +225,16 @@ def measure_centering(front: Image.Image, back: Image.Image) -> CenteringMeasure
         "back_method": None,
     }
 
-    # Front: prefer artwork rect
+    # Front: prefer artwork rect. If we can't detect it, DO NOT assume perfect centering.
     if front_rect is None:
+        # Mark unknown; we keep 50/50 ratios for display but will cap PSA max later.
         front_lr, front_tb = (50.0, 50.0), (50.0, 50.0)
         details["front_detected"] = False
+        details["front_method"] = "none"
     else:
         front_lr, front_tb = _lr_tb_from_rect(fw, fh, front_rect)
         details["front_detected"] = True
+        details["front_method"] = "inner_rect"
 
     def _rect_valid(rect: tuple[int, int, int, int]) -> bool:
         x, y, w, h = rect
@@ -249,6 +267,12 @@ def measure_centering(front: Image.Image, back: Image.Image) -> CenteringMeasure
             details["back_method"] = "none"
 
     psa_max = psa_max_grade_by_centering(front_lr, front_tb, back_lr, back_tb)
+
+    # If we failed to detect the front inner frame, we cannot score centering reliably.
+    # Be conservative: cap to PSA 8 (still allows good cards but prevents fake PSA10 inflation).
+    if not details.get("front_detected", False):
+        psa_max = min(psa_max, 8)
+        details["front_centering_unreliable"] = True
 
     return CenteringMeasurement(
         front_lr=front_lr,
