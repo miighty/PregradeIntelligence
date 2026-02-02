@@ -44,6 +44,67 @@ class CenteringMeasurement:
     details: dict[str, Any]
 
 
+def _find_outer_card_rect(rgb: np.ndarray) -> Optional[tuple[int, int, int, int]]:
+    """Return x,y,w,h of the outer card boundary, or None.
+
+    After warping, the card should be close to axis-aligned. We look for the
+    largest plausible rectangular contour.
+    """
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    H, W = gray.shape
+    if H < 10 or W < 10:
+        return None
+
+    blur = cv2.GaussianBlur(gray, (7, 7), 0)
+    edges = cv2.Canny(blur, 40, 140)
+    edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9)))
+
+    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return None
+
+    image_area = float(H * W)
+    best = None
+    best_score = -1e9
+
+    for cnt in contours:
+        area = float(cv2.contourArea(cnt))
+        if area < image_area * 0.30:
+            continue
+
+        peri = cv2.arcLength(cnt, True)
+        approx = cv2.approxPolyDP(cnt, 0.02 * peri, True)
+        if len(approx) < 4:
+            continue
+
+        x, y, w, h = cv2.boundingRect(approx)
+        if w <= 0 or h <= 0:
+            continue
+
+        area_ratio = (w * h) / image_area
+        # outer card should be a large portion of the warped canvas
+        if area_ratio < 0.45:
+            continue
+
+        # aspect: pokemon card portrait ~0.71 (w/h) but allow wide range due to crops
+        aspect = w / float(h)
+        if aspect < 0.55 or aspect > 0.90:
+            continue
+
+        # prefer larger + more centered
+        cx = x + w / 2
+        cy = y + h / 2
+        nd = ((cx - W / 2) ** 2 + (cy - H / 2) ** 2) ** 0.5
+        nd /= (W**2 + H**2) ** 0.5
+        score = area_ratio - 0.3 * nd
+
+        if score > best_score:
+            best_score = score
+            best = (x, y, w, h)
+
+    return best
+
+
 def _find_inner_artwork_rect(rgb: np.ndarray) -> Optional[tuple[int, int, int, int]]:
     """Return x,y,w,h of inner artwork rect, or None.
 
@@ -123,12 +184,33 @@ def _find_inner_artwork_rect(rgb: np.ndarray) -> Optional[tuple[int, int, int, i
     return best
 
 
-def _lr_tb_from_rect(card_w: int, card_h: int, rect: tuple[int, int, int, int]) -> tuple[tuple[float, float], tuple[float, float]]:
+def _lr_tb_from_rect(
+    card_w: int,
+    card_h: int,
+    rect: tuple[int, int, int, int],
+    outer_rect: Optional[tuple[int, int, int, int]] = None,
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    """Compute LR/TB margin ratios for an inner rect.
+
+    If outer_rect is provided, margins are computed inside that outer frame.
+    """
     x, y, w, h = rect
-    left = x
-    right = card_w - (x + w)
-    top = y
-    bottom = card_h - (y + h)
+
+    if outer_rect is None:
+        ox, oy, ow, oh = 0, 0, card_w, card_h
+    else:
+        ox, oy, ow, oh = outer_rect
+
+    left = x - ox
+    right = (ox + ow) - (x + w)
+    top = y - oy
+    bottom = (oy + oh) - (y + h)
+
+    # clamp in case of minor numeric drift
+    left = max(0, left)
+    right = max(0, right)
+    top = max(0, top)
+    bottom = max(0, bottom)
 
     # Convert to percentages
     lr_total = left + right
@@ -230,6 +312,9 @@ def measure_centering(front: Image.Image, back: Image.Image) -> CenteringMeasure
 
     fh, fw = front_rgb.shape[:2]
 
+    front_outer = _find_outer_card_rect(front_rgb)
+    back_outer = _find_outer_card_rect(back_rgb)
+
     front_rect = _find_inner_artwork_rect(front_rgb)
     back_rect = _find_inner_artwork_rect(back_rgb)
 
@@ -238,6 +323,8 @@ def measure_centering(front: Image.Image, back: Image.Image) -> CenteringMeasure
         "front_warp_reason": f_warp_reason,
         "back_warp_used": b_warp_used,
         "back_warp_reason": b_warp_reason,
+        "front_outer_rect": front_outer,
+        "back_outer_rect": back_outer,
         "front_inner_rect": front_rect,
         "back_inner_rect": back_rect,
         "front_inner_rect_area_ratio": _rect_area_ratio(front_rect, fw, fh),
@@ -253,7 +340,7 @@ def measure_centering(front: Image.Image, back: Image.Image) -> CenteringMeasure
         details["front_detected"] = False
         details["front_method"] = "none"
     else:
-        front_lr, front_tb = _lr_tb_from_rect(fw, fh, front_rect)
+        front_lr, front_tb = _lr_tb_from_rect(fw, fh, front_rect, outer_rect=front_outer)
         details["front_detected"] = True
         details["front_method"] = "inner_rect"
 
@@ -261,6 +348,26 @@ def measure_centering(front: Image.Image, back: Image.Image) -> CenteringMeasure
         ar = details.get("front_inner_rect_area_ratio", 0.0)
         if ar < 0.10 or ar > 0.85:
             details["front_centering_unreliable"] = True
+
+        # If outer rect isn't found, centering is less trustworthy.
+        if front_outer is None:
+            details["front_centering_unreliable"] = True
+            details["front_outer_missing"] = True
+
+        # If the inner rect is effectively flush with any side, it's likely the wrong box.
+        ox, oy, ow, oh = front_outer or (0, 0, fw, fh)
+        x, y, w, h = front_rect
+        m_left = x - ox
+        m_right = (ox + ow) - (x + w)
+        m_top = y - oy
+        m_bottom = (oy + oh) - (y + h)
+        details["front_margins_px"] = [int(m_left), int(m_right), int(m_top), int(m_bottom)]
+        min_margin = int(min(ow, oh) * 0.015)
+        if min(m_left, m_right, m_top, m_bottom) < min_margin:
+            details["front_centering_unreliable"] = True
+            details["front_inner_rect_flush_edge"] = True
+            # Avoid outputting extreme ratios when it's obviously the wrong box.
+            front_lr, front_tb = (50.0, 50.0), (50.0, 50.0)
 
     def _rect_valid(rect: tuple[int, int, int, int]) -> bool:
         x, y, w, h = rect
@@ -274,7 +381,7 @@ def measure_centering(front: Image.Image, back: Image.Image) -> CenteringMeasure
 
     # Back: prefer inner rect if it is valid; otherwise fall back to pokeball.
     if back_rect is not None and _rect_valid(back_rect):
-        back_lr, back_tb = _lr_tb_from_rect(fw, fh, back_rect)
+        back_lr, back_tb = _lr_tb_from_rect(fw, fh, back_rect, outer_rect=back_outer)
         details["back_detected"] = True
         details["back_method"] = "inner_rect"
     else:
@@ -320,14 +427,20 @@ def render_centering_overlay(
     pokeball: Optional[tuple[float, float, float]] = None,
     warp_used: Optional[bool] = None,
     warp_reason: Optional[str] = None,
+    outer_rect: Optional[tuple[int, int, int, int]] = None,
 ) -> Image.Image:
     out = image.convert("RGB").copy()
     draw = ImageDraw.Draw(out)
 
     w, h = out.size
 
-    # Outer border
+    # Outer border (image bounds)
     draw.rectangle([2, 2, w - 3, h - 3], outline=(0, 255, 0), width=2)
+
+    # Detected outer card rect (if any)
+    if outer_rect is not None:
+        ox, oy, ow, oh = outer_rect
+        draw.rectangle([ox, oy, ox + ow, oy + oh], outline=(0, 255, 255), width=3)
 
     if inner_rect is not None:
         x, y, iw, ih = inner_rect
