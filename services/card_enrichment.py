@@ -13,6 +13,7 @@ This avoids needing a giant local card database while still providing
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from typing import Optional, Any
@@ -39,7 +40,15 @@ def enrich_identity(identity: CardIdentity) -> CardIdentity:
     - details (set_id, rarity, types, variants, etc.)
 
     If not, identity is returned unchanged.
+
+    IMPORTANT: enrichment is intentionally opt-in (external dependency).
+    Set PREGRADE_ENABLE_ENRICHMENT=1 to enable. This keeps the core
+    API deterministic/offline-friendly and prevents long tail latency.
     """
+
+    enabled = os.environ.get("PREGRADE_ENABLE_ENRICHMENT", "").strip().lower() in {"1", "true", "yes"}
+    if not enabled:
+        return identity
 
     if not identity.card_number:
         return identity

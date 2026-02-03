@@ -77,6 +77,11 @@ Install dependencies:
 pip install -r requirements.txt
 ```
 
+### Optional runtime flags
+
+- `PREGRADE_ENABLE_ENRICHMENT=1` — enables best-effort TCGdex enrichment (external HTTP calls). Off by default to keep the core API deterministic/offline-friendly and avoid long-tail latency.
+- `PREGRADE_SKIP_OCR=1` — skips the expensive warp/OCR identity extraction and returns a deterministic placeholder identity (useful for fast unit tests / local scaffolding).
+
 Key dependencies:
 - **opencv-python** (`>=4.9.0`): Required for card warp/perspective correction. The service will raise a clear error if missing.
 - **pytesseract** (`>=0.3.10`): OCR for card identity extraction. Requires Tesseract to be installed on your system.
