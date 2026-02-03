@@ -18,6 +18,10 @@ from services.card_identity import (
     _parse_card_number,
     _calculate_confidence,
     _preprocess_image,
+    _is_likely_pokemon_name,
+    _score_name_candidate,
+    _is_plausible_card_number,
+    _calculate_number_plausibility_score,
 )
 from domain.types import CardIdentity
 
@@ -273,3 +277,117 @@ class TestSerialization:
         assert 'card_number' in as_dict
         assert 'confidence' in as_dict
         assert 'match_method' in as_dict
+
+
+class TestPokemonNameValidation:
+    """Verify Pokemon name validation logic."""
+    
+    def test_recognizes_common_pokemon(self):
+        assert _is_likely_pokemon_name('Pikachu')
+        assert _is_likely_pokemon_name('Charizard')
+        assert _is_likely_pokemon_name('Mewtwo')
+        assert _is_likely_pokemon_name('Gengar')
+    
+    def test_recognizes_case_insensitive(self):
+        assert _is_likely_pokemon_name('pikachu')
+        assert _is_likely_pokemon_name('CHARIZARD')
+        assert _is_likely_pokemon_name('MeWtWo')
+    
+    def test_rejects_garbage(self):
+        assert not _is_likely_pokemon_name('xyz')
+        assert not _is_likely_pokemon_name('a')
+        assert not _is_likely_pokemon_name('')
+        assert not _is_likely_pokemon_name('asdfgh')
+    
+    def test_recognizes_modifiers(self):
+        assert _is_likely_pokemon_name('Dark')
+        assert _is_likely_pokemon_name('ex')
+        assert _is_likely_pokemon_name('GX')
+    
+    def test_substring_matching(self):
+        # Should match if known name is substring
+        assert _is_likely_pokemon_name('Pikachu EX')
+        assert _is_likely_pokemon_name('Dark Charizard')
+
+
+class TestNameScoring:
+    """Verify name candidate scoring."""
+    
+    def test_pokemon_name_scores_higher(self):
+        score_pokemon = _score_name_candidate('Pikachu')
+        score_garbage = _score_name_candidate('xyz')
+        assert score_pokemon > score_garbage
+    
+    def test_multi_word_pokemon_scores_higher(self):
+        score_multi = _score_name_candidate('Dark Charizard')
+        score_single_modifier = _score_name_candidate('Dark')
+        assert score_multi > score_single_modifier
+    
+    def test_empty_string_scores_zero(self):
+        assert _score_name_candidate('') == 0.0
+    
+    def test_reasonable_length_preferred(self):
+        score_good = _score_name_candidate('Pikachu')
+        score_too_long = _score_name_candidate('A' * 50)
+        assert score_good > score_too_long
+
+
+class TestCardNumberPlausibility:
+    """Verify card number plausibility checks."""
+    
+    def test_valid_numbers(self):
+        assert _is_plausible_card_number('1/100')
+        assert _is_plausible_card_number('50/200')
+        assert _is_plausible_card_number('100/100')
+    
+    def test_secret_rares_valid(self):
+        # Secret rares can exceed total
+        assert _is_plausible_card_number('110/100')
+        assert _is_plausible_card_number('200/150')
+    
+    def test_rejects_impossible(self):
+        # Number way beyond total
+        assert not _is_plausible_card_number('500/100')
+        # Total too small
+        assert not _is_plausible_card_number('1/5')
+        # Total too large
+        assert not _is_plausible_card_number('1/999')
+    
+    def test_rejects_invalid_format(self):
+        assert not _is_plausible_card_number('')
+        assert not _is_plausible_card_number('abc')
+        assert not _is_plausible_card_number('100')
+    
+    def test_plausibility_score_higher_for_common_ranges(self):
+        # Common set size should score higher
+        score_common = _calculate_number_plausibility_score('50/100')
+        score_uncommon = _calculate_number_plausibility_score('50/400')
+        assert score_common > score_uncommon
+    
+    def test_plausibility_score_within_bounds(self):
+        score = _calculate_number_plausibility_score('50/100')
+        assert 0.0 <= score <= 1.0
+
+
+class TestImprovedNameParsing:
+    """Verify improved name parsing handles various inputs."""
+    
+    def test_strips_hp_values(self):
+        result = _parse_card_name('Pikachu HP 60')
+        assert 'HP' not in result.upper()
+        assert 'Pikachu' in result
+    
+    def test_strips_trainer_noise(self):
+        result = _parse_card_name('Trainer Put 2 damage')
+        # Should strip noise tokens
+        assert 'damage' not in result.lower()
+    
+    def test_handles_multi_word_names(self):
+        result = _parse_card_name('Dark Charizard something else')
+        assert 'Dark' in result
+        assert 'Charizard' in result
+    
+    def test_prefers_validated_names(self):
+        # Input with valid Pokemon name should be extracted
+        result = _parse_card_name('Pikachu')
+        assert result == 'Pikachu'
