@@ -16,6 +16,10 @@ from PIL import Image
 
 from services.grading.canonical import canonicalize
 from services.grading.centering import measure_centering, render_centering_overlay
+from services.grading.corners import detect_corner_defects
+from services.grading.edges import detect_edge_defects
+from services.grading.surface import detect_surface_defects
+from services.grading.photo_quality import detect_photo_quality
 from services.grading.types import (
     GradeDistribution,
     CenteringResult,
@@ -46,21 +50,30 @@ def grade_card(front: Image.Image, back: Image.Image) -> GradeResult:
     # Centering
     cent = measure_centering(cf.image, cb.image)
 
-    # v0 defects (placeholder): until implemented, assume neutral but reflect uncertainty
+    # Defect detection on canonical front image
+    corners_result = detect_corner_defects(cf.image)
+    edges_result = detect_edge_defects(cf.image)
+    surface_result = detect_surface_defects(cf.image)
+
     defects = DefectSignals(
-        corners_severity=0.2,
-        edges_severity=0.2,
-        surface_severity=0.2,
-        details={"note": "v0 placeholder; defect detectors not implemented yet"},
+        corners_severity=corners_result.severity,
+        edges_severity=edges_result.severity,
+        surface_severity=surface_result.severity,
+        details={
+            "corners": corners_result.details,
+            "edges": edges_result.details,
+            "surface": surface_result.details,
+        },
     )
 
-    # v0 photo quality (placeholder)
+    # Photo quality check on front image
+    pq_result = detect_photo_quality(cf.image)
     pq = PhotoQuality(
-        blur=0.0,
-        glare=0.0,
-        occlusion=0.0,
-        usable=True,
-        reasons=(),
+        blur=pq_result.blur,
+        glare=pq_result.glare,
+        occlusion=pq_result.occlusion,
+        usable=pq_result.usable,
+        reasons=pq_result.reasons,
     )
 
     # Convert centering max to a centering score (very rough)
@@ -115,6 +128,8 @@ def grade_card(front: Image.Image, back: Image.Image) -> GradeResult:
             "back": {"warp_used": cb.warp_used, "warp_reason": cb.warp_reason, "warp_debug": cb.warp_debug},
         },
         "centering": cent.details,
+        "defects": defects.details,
+        "photo_quality": pq_result.details,
     }
 
     return GradeResult(

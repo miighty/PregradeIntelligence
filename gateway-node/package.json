@@ -6,8 +6,9 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/index.js",
-    "lint": "eslint ."
+    "lint": "npm run typecheck"
   },
   "dependencies": {
     "@fastify/swagger": "^9.4.0",

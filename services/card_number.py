@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
@@ -26,15 +27,39 @@ class ParsedNumber:
 
 
 # Common font paths on macOS/Linux. We'll try these and fall back to PIL default.
+# Includes fonts similar to those used on Pokemon cards.
 _FONT_CANDIDATES = [
+    # Sans-serif bold fonts (most common on modern cards)
     "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
-    "/System/Library/Fonts/Supplemental/Arial.ttf",
+    "/System/Library/Fonts/Supplemental/Arial Black.ttf",
+    "/System/Library/Fonts/Supplemental/Helvetica Bold.ttf",
     "/System/Library/Fonts/Supplemental/Helvetica.ttf",
     "/Library/Fonts/Arial Bold.ttf",
-    "/Library/Fonts/Arial.ttf",
+    "/Library/Fonts/Arial Black.ttf",
+    # Futura (common in modern Pokemon cards)
+    "/System/Library/Fonts/Supplemental/Futura.ttc",
+    "/System/Library/Fonts/Supplemental/Futura Bold.ttf",
+    "/Library/Fonts/Futura.ttc",
+    # Gill Sans (used in older sets)
+    "/System/Library/Fonts/Supplemental/Gill Sans.ttc",
+    "/System/Library/Fonts/Supplemental/Gill Sans Bold.ttf",
+    "/Library/Fonts/Gill Sans.ttc",
+    # Impact (condensed, good for tight spaces)
+    "/System/Library/Fonts/Supplemental/Impact.ttf",
+    "/Library/Fonts/Impact.ttf",
+    # Standard sans-serif
+    "/System/Library/Fonts/Supplemental/Arial.ttf",
+    # Linux fonts
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
+    "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
 ]
+
+# Multiple sizes to handle scaling variations
+_FONT_SIZES = [44, 48, 52]
 
 
 def parse_card_number_from_crop(crop: Image.Image) -> Optional[ParsedNumber]:
@@ -57,42 +82,174 @@ def parse_card_number_from_crop(crop: Image.Image) -> Optional[ParsedNumber]:
     arr = np.array(img, dtype=np.uint8)
 
     # Try multiple ROI strategies since number placement varies by card template.
-    # Strategy 1: Full image (for warped cards where number fills the crop)
-    # Strategy 2: Bottom portion (for crops that include extra content above)
-    # Strategy 3: Top-left (original heuristic for scans with icons on right)
+    # Ordered by likelihood: bottom portion most common, then full, then top-left
     H, W = arr.shape
     
     roi_strategies = [
-        ("full", arr),
-        ("bottom_half", arr[int(H * 0.5):, :]),
-        ("top_left", arr[0 : int(H * 0.70), 0 : int(W * 0.80)]),
+        ("bottom_third", arr[int(H * 0.67):, :]),  # Most common: number at very bottom
+        ("bottom_half", arr[int(H * 0.5):, :]),     # Wider search if bottom-third fails
+        ("full", arr),                              # Full image fallback
+        ("top_left", arr[0 : int(H * 0.70), 0 : int(W * 0.80)]),  # Rare: scans with icons
     ]
     
     best_result: Optional[ParsedNumber] = None
     best_conf = -1.0
+    
+    # High confidence threshold for early exit
+    EARLY_EXIT_CONF = 0.85
     
     for roi_name, roi in roi_strategies:
         result = _try_parse_roi(roi)
         if result and result.confidence > best_conf:
             best_conf = result.confidence
             best_result = result
+            # Early exit if we have high confidence
+            if best_conf >= EARLY_EXIT_CONF:
+                break
     
     return best_result
 
 
 def _try_parse_roi(roi: np.ndarray) -> Optional[ParsedNumber]:
-    """Try to parse a card number from a single ROI."""
+    """Try to parse a card number from a single ROI.
+    
+    Uses multi-threshold binarization to handle varying backgrounds,
+    with Otsu's method as a fallback for bimodal images.
+    """
     if roi.size == 0:
         return None
     
-    # Use a dark threshold (low percentile) to avoid swallowing the background.
-    t = int(np.percentile(roi, 3))
+    # Try multiple threshold percentiles to handle different backgrounds
+    # Lower percentiles = darker threshold (for light backgrounds)
+    # Higher percentiles = lighter threshold (for textured/holo backgrounds)
+    # Ordered by likelihood: 5% is most common for standard cards
+    threshold_percentiles = [5, 3, 10, 15]
+    
+    best_result: Optional[ParsedNumber] = None
+    best_conf = -1.0
+    
+    # High confidence threshold for early exit
+    EARLY_EXIT_CONF = 0.85
+    
+    for pct in threshold_percentiles:
+        result = _try_parse_with_threshold(roi, pct)
+        if result and result.confidence > best_conf:
+            best_conf = result.confidence
+            best_result = result
+            # Early exit on high confidence
+            if best_conf >= EARLY_EXIT_CONF:
+                return best_result
+    
+    # Try Otsu's method as fallback (good for bimodal images like black text on light bg)
+    otsu_result = _try_parse_with_otsu(roi)
+    if otsu_result and otsu_result.confidence > best_conf:
+        best_result = otsu_result
+    
+    return best_result
+
+
+def _try_parse_with_otsu(roi: np.ndarray) -> Optional[ParsedNumber]:
+    """Try to parse a card number using Otsu's binarization.
+    
+    Otsu's method automatically finds optimal threshold for bimodal images.
+    """
+    if roi.size == 0:
+        return None
+    
+    # Otsu's threshold (inverted for dark text on light background)
+    _, otsu_bw = cv2.threshold(roi, 0, 1, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    bw = otsu_bw.astype(np.uint8)
+
+    # Morphological cleanup
+    kernel = np.ones((3, 3), dtype=np.uint8)
+    bw = cv2.morphologyEx(bw, cv2.MORPH_OPEN, kernel)
+    bw = cv2.morphologyEx(bw, cv2.MORPH_CLOSE, kernel)
+
+    # Auto-crop around ink
+    bw, _ = _autocrop_to_ink(bw, roi)
+
+    # Remove tiny specks
+    bw = _remove_small_components(bw, min_area=25)
+
+    boxes = _connected_component_boxes(bw)
+    if not boxes:
+        return None
+
+    # Filter to likely glyphs: moderate size
+    H2, W2 = bw.shape
+    filtered: list[_Box] = []
+    for b in boxes:
+        if b.h < 10 or b.h > H2 * 0.9:
+            continue
+        if b.w < 8 or b.w > W2 * 0.95:
+            continue
+        filtered.append(b)
+
+    # Split wide boxes
+    split: list[_Box] = []
+    for b in filtered:
+        if b.w > b.h * 2.2:
+            split.extend(_split_wide_box(bw, b))
+        else:
+            split.append(b)
+
+    boxes = sorted(split, key=lambda b: b.x)
+    if not boxes:
+        return None
+
+    glyphs: list[np.ndarray] = []
+    for b in boxes:
+        g = bw[b.y : b.y + b.h, b.x : b.x + b.w]
+        if g.shape[1] < 8:
+            continue
+        glyphs.append(_render_glyph(g))
+
+    if not glyphs:
+        return None
+
+    templates = _get_templates()
+
+    # Collect matches with their confidence scores
+    matches: list[tuple[str, float]] = []
+    for g in glyphs:
+        ch, score = _match_template(g, templates)
+        if ch is None:
+            continue
+        matches.append((ch, score))
+
+    if not matches:
+        return None
+
+    # Apply character normalizations
+    matches = [(ch.replace("I", "1").replace("l", "1"), s) for ch, s in matches]
+
+    # Use sliding window to find best number pattern
+    result = _find_best_number_window(matches)
+    if result is None:
+        return None
+
+    number, conf = result
+    return ParsedNumber(number=number, confidence=round(conf, 2))
+
+
+def _try_parse_with_threshold(roi: np.ndarray, percentile: int) -> Optional[ParsedNumber]:
+    """Try to parse a card number using a specific threshold percentile."""
+    if roi.size == 0:
+        return None
+    
+    # Use threshold at given percentile to binarize
+    t = int(np.percentile(roi, percentile))
     bw = (roi <= t).astype(np.uint8)  # 1 for ink
+
+    # Morphological cleanup: remove noise and fill small holes
+    kernel = np.ones((3, 3), dtype=np.uint8)
+    bw = cv2.morphologyEx(bw, cv2.MORPH_OPEN, kernel)   # remove noise specks
+    bw = cv2.morphologyEx(bw, cv2.MORPH_CLOSE, kernel)  # fill small holes in glyphs
 
     # Auto-crop around ink (drops backgrounds).
     bw, _ = _autocrop_to_ink(bw, roi)
 
-    # Remove tiny specks
+    # Remove tiny specks (additional cleanup after morphology)
     bw = _remove_small_components(bw, min_area=25)
 
     boxes = _connected_component_boxes(bw)
@@ -133,30 +290,27 @@ def _try_parse_roi(roi: np.ndarray) -> Optional[ParsedNumber]:
 
     templates = _get_templates()
 
-    chars: list[str] = []
-    scores: list[float] = []
+    # Collect matches with their confidence scores
+    matches: list[tuple[str, float]] = []
     for g in glyphs:
         ch, score = _match_template(g, templates)
         if ch is None:
             continue
-        chars.append(ch)
-        scores.append(score)
+        matches.append((ch, score))
 
-    if not chars:
+    if not matches:
         return None
 
-    text = "".join(chars)
+    # Apply character normalizations to handle common confusions
+    matches = [(ch.replace("I", "1").replace("l", "1"), s) for ch, s in matches]
 
-    # Normalise common confusions
-    text = text.replace("I", "1").replace("l", "1")
-
-    # Heuristic: we expect something like 1-3 digits / 1-3 digits
-    parsed = _extract_number_pattern(text)
-    if not parsed:
+    # Use sliding window to find best number pattern, ignoring surrounding noise
+    result = _find_best_number_window(matches)
+    if result is None:
         return None
 
-    conf = float(np.clip(np.mean(scores) if scores else 0.0, 0.0, 1.0))
-    return ParsedNumber(number=parsed, confidence=round(conf, 2))
+    number, conf = result
+    return ParsedNumber(number=number, confidence=round(conf, 2))
 
 
 # -----------------
@@ -181,7 +335,123 @@ def _extract_number_pattern(s: str) -> Optional[str]:
     right = "".join(ch for ch in right if ch.isdigit())
     if not (1 <= len(left) <= 3 and 1 <= len(right) <= 3):
         return None
-    return f"{int(left)}/{int(right)}"
+    
+    num = int(left)
+    total = int(right)
+    
+    # Basic plausibility checks for Pokemon cards
+    # Reject obviously invalid numbers
+    if num <= 0 or total <= 0:
+        return None
+    # Most sets have at least 20 cards
+    if total < 10:
+        return None
+    # Largest sets are around 300-400, allow up to 500 for promos/special
+    if total > 500:
+        return None
+    # Card number shouldn't exceed total by too much (secret rares allow +150)
+    if num > total + 150:
+        return None
+    
+    return f"{num}/{total}"
+
+
+def _calculate_number_confidence(number: str, match_scores: list[float]) -> float:
+    """Calculate confidence for a detected number based on plausibility and match quality.
+    
+    Higher confidence for:
+    - Numbers that pass all plausibility checks
+    - Higher template match scores
+    - Common set sizes (50-300)
+    """
+    if not number or "/" not in number:
+        return 0.0
+    
+    parts = number.split("/")
+    if len(parts) != 2:
+        return 0.0
+    
+    try:
+        num = int(parts[0])
+        total = int(parts[1])
+    except ValueError:
+        return 0.0
+    
+    # Base confidence from template matching
+    if match_scores:
+        base_conf = sum(match_scores) / len(match_scores)
+    else:
+        base_conf = 0.5
+    
+    # Plausibility bonuses/penalties
+    plausibility_score = 0.0
+    
+    # Common set sizes (most sets are 100-200)
+    if 50 <= total <= 300:
+        plausibility_score += 0.1
+    elif 20 <= total <= 50 or 300 < total <= 400:
+        plausibility_score += 0.05
+    
+    # Number within total (non-secret rare)
+    if num <= total:
+        plausibility_score += 0.05
+    
+    # Very plausible range for secret rares
+    if total < num <= total + 50:
+        plausibility_score += 0.02
+    
+    # Penalize edge cases
+    if num > total + 100:
+        plausibility_score -= 0.1
+    if total < 20:
+        plausibility_score -= 0.15
+    
+    return min(1.0, max(0.0, base_conf + plausibility_score))
+
+
+def _find_best_number_window(
+    matches: list[tuple[str, float]]
+) -> Optional[tuple[str, float]]:
+    """Find the best contiguous substring matching digit/digit pattern.
+    
+    Uses sliding window to find the highest-confidence valid "XXX/YYY" pattern,
+    ignoring surrounding noise like set codes or symbols.
+    
+    Returns (number, confidence) for the best window, or None.
+    """
+    if len(matches) < 3:  # minimum: "X/Y"
+        return None
+    
+    best_number: Optional[str] = None
+    best_conf = -1.0
+    best_scores: list[float] = []
+    
+    # Try all possible window sizes and positions
+    # Window size 3-7 covers patterns like "1/9" to "999/999"
+    for start in range(len(matches)):
+        for end in range(start + 3, min(start + 8, len(matches) + 1)):
+            window = matches[start:end]
+            text = "".join(ch for ch, _ in window)
+            
+            # Check if this window forms a valid pattern (includes plausibility)
+            parsed = _extract_number_pattern(text)
+            if parsed:
+                # Calculate confidence from this window's scores
+                window_scores = [s for _, s in window if s > 0]
+                if window_scores:
+                    # Use improved confidence calculation with plausibility
+                    conf = _calculate_number_confidence(parsed, window_scores)
+                    if conf > best_conf:
+                        best_conf = conf
+                        best_number = parsed
+                        best_scores = window_scores
+    
+    if best_number is None:
+        return None
+    
+    # Final confidence adjustment based on match quality
+    final_conf = _calculate_number_confidence(best_number, best_scores)
+    return best_number, round(final_conf, 2)
 
 
 def _render_glyph(g: np.ndarray) -> np.ndarray:
@@ -199,7 +469,17 @@ def _render_glyph(g: np.ndarray) -> np.ndarray:
     return out
 
 
+# Confidence thresholds for template matching
+_MATCH_THRESHOLD_HARD = 0.65  # Hard reject below this
+_MATCH_THRESHOLD_SOFT = 0.60  # Soft accept (penalized) between soft and hard
+
+
 def _match_template(g: np.ndarray, templates: dict[str, list[np.ndarray]]) -> tuple[Optional[str], float]:
+    """Match a glyph against templates.
+    
+    Returns (char, score) where score is the confidence.
+    Uses soft matching: scores between 0.60-0.65 are accepted but penalized.
+    """
     best_ch: Optional[str] = None
     best_score = -1e9
 
@@ -212,9 +492,16 @@ def _match_template(g: np.ndarray, templates: dict[str, list[np.ndarray]]) -> tu
                 best_score = score
                 best_ch = ch
 
-    # Reject if too low.
-    if best_score < 0.72:
+    # Hard reject below soft threshold
+    if best_score < _MATCH_THRESHOLD_SOFT:
         return None, 0.0
+
+    # Soft match: accept but penalize scores between soft and hard thresholds
+    # This allows marginal matches to contribute if pattern validation succeeds
+    if best_score < _MATCH_THRESHOLD_HARD:
+        # Penalize soft matches by reducing their confidence
+        penalized_score = best_score * 0.85
+        return best_ch, float(penalized_score)
 
     return best_ch, float(best_score)
 
@@ -230,14 +517,16 @@ def _get_templates() -> dict[str, list[np.ndarray]]:
 
 
 def _build_templates() -> dict[str, list[np.ndarray]]:
+    """Build glyph templates from multiple fonts at multiple sizes."""
     chars = list("0123456789/")
 
     fonts: list[ImageFont.FreeTypeFont | ImageFont.ImageFont] = []
     for p in _FONT_CANDIDATES:
-        try:
-            fonts.append(ImageFont.truetype(p, 48))
-        except Exception:
-            pass
+        for size in _FONT_SIZES:
+            try:
+                fonts.append(ImageFont.truetype(p, size))
+            except Exception:
+                pass
     if not fonts:
         fonts.append(ImageFont.load_default())
 

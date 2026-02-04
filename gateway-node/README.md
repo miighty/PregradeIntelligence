@@ -16,8 +16,8 @@ cd gateway-node
 npm install
 
 # optional
-export PREGRADE_API_KEYS="dev_key"
-export PREGRADE_RATE_LIMIT_PER_MIN="60"
+cp .env.example .env
+set -a; source .env; set +a
 
 npm run dev
 ```

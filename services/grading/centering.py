@@ -32,6 +32,13 @@ except ImportError as e:
 from services.grading.centering_rules import psa_max_grade_by_centering
 
 
+# Border detection constants
+BORDER_SAMPLE_POSITIONS = 5  # Number of positions to sample along each edge
+BORDER_MAX_WIDTH = 50  # Maximum expected border width in pixels (on canonical 744x1040)
+BORDER_GRADIENT_THRESHOLD = 20  # Minimum brightness change to detect border edge
+BORDER_MIN_WIDTH = 5  # Minimum expected border width
+
+
 @dataclass(frozen=True)
 class CenteringMeasurement:
     front_lr: tuple[float, float]
@@ -194,29 +201,165 @@ def _detect_pokeball_center(rgb: np.ndarray) -> Optional[tuple[float, float, flo
     return best
 
 
+def _find_border_edge(profile: np.ndarray, from_edge: bool = True) -> int:
+    """Find where the border transitions to artwork in a 1D brightness profile.
+    
+    Args:
+        profile: 1D array of brightness values from edge to center
+        from_edge: If True, scan from edge inward; if False, scan from center outward
+    
+    Returns:
+        Pixel position where border ends (or 0 if not found)
+    """
+    if len(profile) < BORDER_MIN_WIDTH:
+        return 0
+    
+    # Compute gradient (difference between adjacent pixels)
+    gradient = np.abs(np.diff(profile.astype(np.float32)))
+    
+    # Look for significant brightness change within expected border region
+    search_range = min(BORDER_MAX_WIDTH, len(gradient))
+    
+    for i in range(BORDER_MIN_WIDTH, search_range):
+        # Check if there's a significant gradient at this position
+        if gradient[i] > BORDER_GRADIENT_THRESHOLD:
+            # Verify this is a sustained edge (not noise) by checking neighbors
+            window_start = max(0, i - 2)
+            window_end = min(len(gradient), i + 3)
+            if np.max(gradient[window_start:window_end]) > BORDER_GRADIENT_THRESHOLD:
+                return i
+    
+    return 0
+
+
+def _measure_border_widths(rgb: np.ndarray) -> Optional[dict[str, float]]:
+    """Measure physical border width on each side by detecting color/brightness transitions.
+    
+    This approach measures the actual border by finding where the uniform border
+    color transitions to the card artwork.
+    
+    Args:
+        rgb: RGB image array
+    
+    Returns:
+        Dictionary with border widths {"left": px, "right": px, "top": px, "bottom": px}
+        or None if detection fails
+    """
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    H, W = gray.shape
+    
+    # Sample at multiple Y positions for left/right borders
+    sample_ys = [int(H * (i + 1) / (BORDER_SAMPLE_POSITIONS + 1)) for i in range(BORDER_SAMPLE_POSITIONS)]
+    # Sample at multiple X positions for top/bottom borders
+    sample_xs = [int(W * (i + 1) / (BORDER_SAMPLE_POSITIONS + 1)) for i in range(BORDER_SAMPLE_POSITIONS)]
+    
+    left_widths = []
+    right_widths = []
+    top_widths = []
+    bottom_widths = []
+    
+    # Measure left and right borders
+    for y in sample_ys:
+        # Left border: scan from left edge inward
+        left_profile = gray[y, :BORDER_MAX_WIDTH]
+        left_edge = _find_border_edge(left_profile)
+        if left_edge > 0:
+            left_widths.append(left_edge)
+        
+        # Right border: scan from right edge inward
+        right_profile = gray[y, -BORDER_MAX_WIDTH:][::-1]  # Reverse for inward scan
+        right_edge = _find_border_edge(right_profile)
+        if right_edge > 0:
+            right_widths.append(right_edge)
+    
+    # Measure top and bottom borders
+    for x in sample_xs:
+        # Top border: scan from top edge inward
+        top_profile = gray[:BORDER_MAX_WIDTH, x]
+        top_edge = _find_border_edge(top_profile)
+        if top_edge > 0:
+            top_widths.append(top_edge)
+        
+        # Bottom border: scan from bottom edge inward
+        bottom_profile = gray[-BORDER_MAX_WIDTH:, x][::-1]  # Reverse for inward scan
+        bottom_edge = _find_border_edge(bottom_profile)
+        if bottom_edge > 0:
+            bottom_widths.append(bottom_edge)
+    
+    # Need at least some measurements on each side
+    if not (left_widths and right_widths and top_widths and bottom_widths):
+        return None
+    
+    # Use median to be robust to outliers
+    return {
+        "left": float(np.median(left_widths)),
+        "right": float(np.median(right_widths)),
+        "top": float(np.median(top_widths)),
+        "bottom": float(np.median(bottom_widths)),
+    }
+
+
+def _lr_tb_from_borders(borders: dict[str, float]) -> tuple[tuple[float, float], tuple[float, float]]:
+    """Convert border widths to LR/TB centering ratios.
+    
+    Args:
+        borders: {"left": px, "right": px, "top": px, "bottom": px}
+    
+    Returns:
+        ((left%, right%), (top%, bottom%))
+    """
+    lr_total = borders["left"] + borders["right"]
+    tb_total = borders["top"] + borders["bottom"]
+    
+    if lr_total <= 0:
+        lr = (50.0, 50.0)
+    else:
+        lr = (borders["left"] / lr_total * 100.0, borders["right"] / lr_total * 100.0)
+    
+    if tb_total <= 0:
+        tb = (50.0, 50.0)
+    else:
+        tb = (borders["top"] / tb_total * 100.0, borders["bottom"] / tb_total * 100.0)
+    
+    return lr, tb
+
+
 def measure_centering(front: Image.Image, back: Image.Image) -> CenteringMeasurement:
     front_rgb = np.array(front.convert("RGB"))
     back_rgb = np.array(back.convert("RGB"))
 
     fh, fw = front_rgb.shape[:2]
 
+    # Try border-based measurement first (most reliable for physical centering)
+    front_borders = _measure_border_widths(front_rgb)
+    
+    # Fallback: inner artwork rect detection
     front_rect = _find_inner_artwork_rect(front_rgb)
     back_rect = _find_inner_artwork_rect(back_rgb)
 
     details: dict[str, Any] = {
+        "front_borders": front_borders,
         "front_inner_rect": front_rect,
         "back_inner_rect": back_rect,
         "back_pokeball": None,
         "back_method": None,
+        "front_method": None,
     }
 
-    # Front: prefer artwork rect
-    if front_rect is None:
-        front_lr, front_tb = (50.0, 50.0), (50.0, 50.0)
-        details["front_detected"] = False
-    else:
+    # Front: PRIORITIZE border measurement (measures physical card border)
+    # Fall back to inner rect if border detection fails
+    if front_borders is not None:
+        front_lr, front_tb = _lr_tb_from_borders(front_borders)
+        details["front_detected"] = True
+        details["front_method"] = "border"
+    elif front_rect is not None:
         front_lr, front_tb = _lr_tb_from_rect(fw, fh, front_rect)
         details["front_detected"] = True
+        details["front_method"] = "inner_rect"
+    else:
+        front_lr, front_tb = (50.0, 50.0), (50.0, 50.0)
+        details["front_detected"] = False
+        details["front_method"] = "none"
 
     def _rect_valid(rect: tuple[int, int, int, int]) -> bool:
         x, y, w, h = rect
@@ -228,25 +371,27 @@ def measure_centering(front: Image.Image, back: Image.Image) -> CenteringMeasure
             return False
         return True
 
-    # Back: prefer inner rect if it is valid; otherwise fall back to pokeball.
-    if back_rect is not None and _rect_valid(back_rect):
+    # Back: PRIORITIZE Pokeball detection (most reliable for standard Pokemon backs)
+    # Only fall back to inner_rect if Pokeball detection fails
+    pb = _detect_pokeball_center(back_rgb)
+    details["back_pokeball"] = pb
+    
+    if pb is not None:
+        cx, cy, r = pb
+        back_lr, back_tb = _lr_tb_from_center(fw, fh, cx, cy)
+        details["back_detected"] = True
+        details["back_method"] = "pokeball"
+    elif back_rect is not None and _rect_valid(back_rect):
+        # Fallback to inner rect only if Pokeball not found
         back_lr, back_tb = _lr_tb_from_rect(fw, fh, back_rect)
         details["back_detected"] = True
         details["back_method"] = "inner_rect"
-    else:
         if back_rect is not None and not _rect_valid(back_rect):
             details["back_inner_rect_invalid"] = True
-        pb = _detect_pokeball_center(back_rgb)
-        details["back_pokeball"] = pb
-        if pb is not None:
-            cx, cy, r = pb
-            back_lr, back_tb = _lr_tb_from_center(fw, fh, cx, cy)
-            details["back_detected"] = True
-            details["back_method"] = "pokeball"
-        else:
-            back_lr, back_tb = (50.0, 50.0), (50.0, 50.0)
-            details["back_detected"] = False
-            details["back_method"] = "none"
+    else:
+        back_lr, back_tb = (50.0, 50.0), (50.0, 50.0)
+        details["back_detected"] = False
+        details["back_method"] = "none"
 
     psa_max = psa_max_grade_by_centering(front_lr, front_tb, back_lr, back_tb)
 

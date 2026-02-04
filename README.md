@@ -77,6 +77,71 @@ Install dependencies:
 pip install -r requirements.txt
 ```
 
+If you are on macOS with an externally managed Python, use the safe venv bootstrap:
+
+```bash
+bash scripts/bootstrap_venv_safe.sh
+source .venv/bin/activate
+```
+
+## API docs
+
+Minimal v1 API documentation is in `docs/api.md`.
+The Python Lambda handler at `api/handler.py` is the current source of truth.
+
+## Run locally (unit-test style)
+
+You can invoke the Lambda handler directly with an API Gateway–style event.
+Example (front image must be base64):
+
+```bash
+python - <<'PY'
+import base64
+import json
+from pathlib import Path
+
+from api.handler import lambda_handler
+
+image_path = Path("/path/to/front.png")
+image_b64 = base64.b64encode(image_path.read_bytes()).decode("utf-8")
+
+event = {
+    "httpMethod": "POST",
+    "path": "/v1/analyze",
+    "headers": {"content-type": "application/json"},
+    "body": json.dumps({
+        "card_type": "pokemon",
+        "front_image": {"encoding": "base64", "data": image_b64},
+    }),
+    "isBase64Encoded": False,
+}
+
+resp = lambda_handler(event, None)
+print(resp["statusCode"])
+print(resp["body"])
+PY
+```
+
+Or use the helper script:
+
+```bash
+python scripts/run_analyze.py --front /path/to/front.png
+```
+
+## Validate outputs
+
+Recommended checks for a single image:
+
+- **Determinism**: run the same input twice; `request_id` and outputs must match.
+- **Identity**: verify `card_identity.card_name` and `confidence` look reasonable.
+- **Gatekeeper**: ensure rejected inputs return structured reason codes.
+- **Condition signals**: verify `condition_signals` are explainable and tied to visible evidence.
+
+### Optional runtime flags
+
+- `PREGRADE_ENABLE_ENRICHMENT=1` — enables best-effort TCGdex enrichment (external HTTP calls). Off by default to keep the core API deterministic/offline-friendly and avoid long-tail latency.
+- `PREGRADE_SKIP_OCR=1` — skips the expensive warp/OCR identity extraction and returns a deterministic placeholder identity (useful for fast unit tests / local scaffolding).
+
 Key dependencies:
 - **opencv-python** (`>=4.9.0`): Required for card warp/perspective correction. The service will raise a clear error if missing.
 - **pytesseract** (`>=0.3.10`): OCR for card identity extraction. Requires Tesseract to be installed on your system.
