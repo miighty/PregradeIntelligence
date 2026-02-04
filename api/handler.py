@@ -28,9 +28,14 @@ from typing import Any, Optional
 from api.http import decode_json_body, get_header, response, content_hash_str, content_hash_bytes
 from api.schemas import ErrorCode, ErrorResponse, AnalyzeResponse
 from api.schemas_grade import GradeResponse
-from domain.types import AnalysisResult, GatekeeperResult, ROIResult
+from domain.types import AnalysisResult, ConditionSignal, GatekeeperResult, ROIResult
 from services.card_identity import extract_card_identity_from_bytes
 from api.handler_grade import handle_grade
+from services.grading.canonical import load_image_from_bytes, canonicalize
+from services.grading.corners import detect_corner_defects
+from services.grading.edges import detect_edge_defects
+from services.grading.surface import detect_surface_defects
+from services.grading.photo_quality import detect_photo_quality
 
 
 _API_VERSION = "1.0"
@@ -38,6 +43,139 @@ _API_VERSION = "1.0"
 # Fixed timestamp to keep responses deterministic until a product decision is made
 # about time metadata in deterministic outputs.
 _PROCESSED_AT = datetime(1970, 1, 1, tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+# Severity thresholds for condition signals
+_SEVERITY_MINOR = 0.25
+_SEVERITY_MODERATE = 0.50
+_SEVERITY_SIGNIFICANT = 0.75
+
+
+def _severity_label(score: float) -> str:
+    """Convert a 0..1 severity score to a severity label."""
+    if score >= _SEVERITY_SIGNIFICANT:
+        return "significant"
+    elif score >= _SEVERITY_MODERATE:
+        return "moderate"
+    elif score >= _SEVERITY_MINOR:
+        return "minor"
+    return "none"
+
+
+def _analyze_front_image_for_signals(image_bytes: bytes) -> tuple[ConditionSignal, ...]:
+    """Run defect detectors on front image and generate condition signals.
+    
+    This is a lightweight analysis for the /v1/analyze endpoint that only
+    has access to the front image.
+    """
+    try:
+        img = load_image_from_bytes(image_bytes)
+        canonical = canonicalize(img)
+        
+        # Run detectors
+        corners = detect_corner_defects(canonical.image)
+        edges = detect_edge_defects(canonical.image)
+        surface = detect_surface_defects(canonical.image)
+        photo_quality = detect_photo_quality(canonical.image)
+        
+        signals = []
+        
+        # Corners signal
+        corners_summary = corners.details.get("per_corner_summary", {})
+        worst_corner = max(corners_summary.items(), key=lambda x: x[1].get("severity", 0), default=(None, {}))
+        worst_corner_name = worst_corner[0].replace("_", " ") if worst_corner[0] else "corners"
+        
+        if corners.severity < _SEVERITY_MINOR:
+            corners_obs = "All corners show minimal wear, consistent with pack-fresh condition"
+        elif corners.severity < _SEVERITY_MODERATE:
+            corners_obs = f"Minor wear detected, most noticeable at {worst_corner_name}"
+        elif corners.severity < _SEVERITY_SIGNIFICANT:
+            corners_obs = f"Moderate corner wear detected at {worst_corner_name}, showing whitening"
+        else:
+            corners_obs = f"Significant corner damage at {worst_corner_name}, notable whitening or flattening"
+        
+        corners_evidence_parts = []
+        for corner, data in corners_summary.items():
+            whitening = data.get("whitening_ratio", 0) * 100
+            if whitening > 5:
+                corners_evidence_parts.append(f"{corner.replace('_', ' ')}: {whitening:.1f}% whitening")
+        corners_evidence = "; ".join(corners_evidence_parts) if corners_evidence_parts else "No significant whitening detected"
+        
+        signals.append(ConditionSignal(
+            signal_type="corners",
+            observation=corners_obs,
+            severity=_severity_label(corners.severity),
+            confidence=0.85,
+            evidence_description=corners_evidence,
+        ))
+        
+        # Edges signal
+        edges_summary = edges.details.get("per_edge_summary", {})
+        worst_edge = max(edges_summary.items(), key=lambda x: x[1].get("severity", 0), default=(None, {}))
+        worst_edge_name = worst_edge[0] if worst_edge[0] else "edges"
+        
+        if edges.severity < _SEVERITY_MINOR:
+            edges_obs = "Edges show minimal wear, no visible chipping or whitening"
+        elif edges.severity < _SEVERITY_MODERATE:
+            edges_obs = f"Minor edge wear detected, most noticeable along {worst_edge_name}"
+        elif edges.severity < _SEVERITY_SIGNIFICANT:
+            edges_obs = f"Moderate edge wear along {worst_edge_name}, some whitening visible"
+        else:
+            edges_obs = f"Significant edge damage along {worst_edge_name}, visible chipping or whitening"
+        
+        edges_evidence_parts = []
+        for edge, data in edges_summary.items():
+            whitening = data.get("whitening_ratio", 0) * 100
+            chipping = data.get("chipping_score", 0) * 100
+            if whitening > 5 or chipping > 20:
+                edges_evidence_parts.append(f"{edge}: whitening {whitening:.1f}%, chipping {chipping:.0f}%")
+        edges_evidence = "; ".join(edges_evidence_parts) if edges_evidence_parts else "Consistent color along all borders"
+        
+        signals.append(ConditionSignal(
+            signal_type="edges",
+            observation=edges_obs,
+            severity=_severity_label(edges.severity),
+            confidence=0.85,
+            evidence_description=edges_evidence,
+        ))
+        
+        # Surface signal
+        scratch_count = surface.details.get("scratch_count", 0)
+        texture_var = surface.details.get("texture_variance", 0)
+        
+        if surface.severity < _SEVERITY_MINOR:
+            surface_obs = "Surface is clean with no visible scratches or scuffs"
+        elif surface.severity < _SEVERITY_MODERATE:
+            if scratch_count > 0:
+                surface_obs = f"Surface shows {scratch_count} minor scratches visible under analysis"
+            else:
+                surface_obs = "Surface shows minor texture irregularities"
+        elif surface.severity < _SEVERITY_SIGNIFICANT:
+            if scratch_count > 0:
+                surface_obs = f"Surface has {scratch_count} scratches, some may be visible to naked eye"
+            else:
+                surface_obs = "Surface shows moderate wear and texture irregularities"
+        else:
+            if scratch_count > 0:
+                surface_obs = f"Surface has {scratch_count} notable scratches and visible wear"
+            else:
+                surface_obs = "Surface shows significant wear, scuffs, or damage"
+        
+        surface_evidence = f"{scratch_count} linear artifacts detected; texture variance {texture_var:.1f}"
+        
+        signals.append(ConditionSignal(
+            signal_type="surface",
+            observation=surface_obs,
+            severity=_severity_label(surface.severity),
+            confidence=0.80,
+            evidence_description=surface_evidence,
+        ))
+        
+        return tuple(signals)
+        
+    except Exception:
+        # If analysis fails, return empty signals rather than failing the request
+        return ()
 
 
 # -----------------------------------------------------------------------------
@@ -280,6 +418,8 @@ def _handle_analyze(event: dict[str, Any]) -> dict[str, Any]:
     )
 
     roi = None
+    condition_signals: tuple[ConditionSignal, ...] = ()
+    
     if not rejected:
         # Placeholder ROI framing (no pricing model yet). Advisory only.
         roi = ROIResult(
@@ -289,11 +429,14 @@ def _handle_analyze(event: dict[str, Any]) -> dict[str, Any]:
             factors=("roi_model_not_configured",),
             explanation="ROI model not configured in this milestone. Recommendation is advisory placeholder.",
         )
+        
+        # Run condition analysis on front image
+        condition_signals = _analyze_front_image_for_signals(image_bytes)
 
     analysis = AnalysisResult(
         request_id=request_id,
         card_identity=None if rejected else identity,
-        condition_signals=(),
+        condition_signals=condition_signals,
         gatekeeper_result=gatekeeper,
         roi_result=roi,
         processed_at=_PROCESSED_AT,
