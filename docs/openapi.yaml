@@ -1,0 +1,364 @@
+openapi: 3.0.3
+info:
+  title: PreGrade API
+  description: |
+    Decision-intelligence API for trading card analysis.
+    
+    PreGrade analyzes card images and returns deterministic JSON describing:
+    - Card identity (what the card is)
+    - Condition signals (what is observable; not a grade)
+    - Gatekeeper acceptance/rejection (structured reasons)
+    - ROI-framed grading recommendation (advisory only)
+    
+    **Important**: This service does NOT assign grades. All outputs are advisory,
+    probabilistic, and explainable.
+  version: "1.0"
+  contact:
+    name: PreGrade Support
+
+servers:
+  - url: /
+    description: Local / Lambda
+
+security:
+  - ApiKeyAuth: []
+
+paths:
+  /v1/health:
+    get:
+      summary: Health check
+      description: Returns API health status and version.
+      operationId: getHealth
+      security: []
+      responses:
+        "200":
+          description: API is healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+              example:
+                ok: true
+                api_version: "1.0"
+
+  /v1/analyze:
+    post:
+      summary: Analyze card (front only)
+      description: |
+        Analyzes a Pokemon card front image and returns identity, condition signals,
+        gatekeeper result, and ROI recommendation.
+        
+        Back image is accepted but not currently used in this endpoint.
+      operationId: analyzeCard
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AnalyzeRequest"
+            example:
+              card_type: pokemon
+              front_image:
+                encoding: base64
+                data: "/9j/4AAQSkZJRgABAQAAAQABAAD..."
+              client_reference: "my-ref-123"
+      responses:
+        "200":
+          description: Analysis complete (includes gatekeeper rejections)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalyzeResponse"
+              example:
+                api_version: "1.0"
+                request_id: "ab68f054392005_eaa2bded"
+                client_reference: "my-ref-123"
+                result:
+                  card_identity:
+                    card_name: "Charizard"
+                    card_number: "4/102"
+                    confidence: 0.85
+                    set_name: "Base Set"
+                    variant: null
+                    match_method: "ocr_extraction"
+                  condition_signals:
+                    - signal_type: "corners"
+                      observation: "Minor wear detected, most noticeable at top left"
+                      severity: "minor"
+                      confidence: 0.85
+                      evidence_description: "top left: 8.2% whitening"
+                    - signal_type: "edges"
+                      observation: "Edges show minimal wear, no visible chipping"
+                      severity: "none"
+                      confidence: 0.85
+                      evidence_description: "Consistent color along all borders"
+                    - signal_type: "surface"
+                      observation: "Surface is clean with no visible scratches"
+                      severity: "none"
+                      confidence: 0.80
+                      evidence_description: "0 linear artifacts detected"
+                  gatekeeper_result:
+                    accepted: true
+                    reason_codes: []
+                    reasons: []
+                    explanation: "Accepted: minimum input checks passed."
+                  roi_result:
+                    recommendation: "uncertain"
+                    risk_band: "high"
+                    confidence: 0.2
+                    factors:
+                      - "roi_model_not_configured"
+                    explanation: "ROI model not configured in this milestone."
+                  processed_at: "1970-01-01T00:00:00Z"
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                api_version: "1.0"
+                error_code: "MISSING_REQUIRED_FIELD"
+                error_message: "Missing required field: front_image."
+        "401":
+          description: Authentication failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                api_version: "1.0"
+                error_code: "INVALID_API_KEY"
+                error_message: "Invalid API key."
+
+  /v1/grade:
+    post:
+      summary: Grade card (front + back)
+      description: |
+        Analyzes both front and back images of a Pokemon card and returns
+        a detailed condition assessment including centering analysis.
+        
+        Both front_image and back_image are required.
+      operationId: gradeCard
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GradeRequest"
+            example:
+              card_type: pokemon
+              front_image:
+                encoding: base64
+                data: "/9j/4AAQSkZJRgABAQAAAQABAAD..."
+              back_image:
+                encoding: base64
+                data: "/9j/4AAQSkZJRgABAQAAAQABAAD..."
+              client_reference: "grade-ref-456"
+      responses:
+        "200":
+          description: Grading analysis complete
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GradeResponse"
+              example:
+                api_version: "1.0"
+                request_id: "c3d4e5f6789012_eaa2bded"
+                client_reference: "grade-ref-456"
+                result:
+                  distribution:
+                    psa_10: 0.15
+                    psa_9: 0.45
+                    psa_8: 0.30
+                    psa_7_or_lower: 0.10
+                  centering:
+                    front_lr:
+                      - 48.5
+                      - 51.5
+                    front_tb:
+                      - 49.0
+                      - 51.0
+                    back_lr:
+                      - 50.0
+                      - 50.0
+                    back_tb:
+                      - 50.0
+                      - 50.0
+                    psa_centering_max: 10
+                  defects:
+                    corners_severity: 0.15
+                    edges_severity: 0.10
+                    surface_severity: 0.05
+                  photo_quality:
+                    blur: 0.02
+                    glare: 0.01
+                    occlusion: 0.0
+                    usable: true
+                    reasons: []
+                  explanations:
+                    centering:
+                      front_method: "border"
+                      back_method: "pokeball"
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                api_version: "1.0"
+                error_code: "MISSING_REQUIRED_FIELD"
+                error_message: "Missing required fields: front_image and back_image."
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: |
+        API key for authentication. Required when PREGRADE_API_KEYS is configured.
+        In development mode (no keys configured), requests are allowed without auth.
+
+  schemas:
+    HealthResponse:
+      type: object
+      required:
+        - ok
+        - api_version
+      properties:
+        ok:
+          type: boolean
+          example: true
+        api_version:
+          type: string
+          example: "1.0"
+
+    ImageInput:
+      type: object
+      required:
+        - encoding
+        - data
+      properties:
+        encoding:
+          type: string
+          enum:
+            - base64
+          description: Only 'base64' is supported in this milestone.
+        data:
+          type: string
+          description: Base64-encoded image bytes.
+        media_type:
+          type: string
+          description: MIME type (optional).
+          example: "image/jpeg"
+
+    AnalyzeRequest:
+      type: object
+      required:
+        - card_type
+        - front_image
+      properties:
+        card_type:
+          type: string
+          enum:
+            - pokemon
+          description: Only 'pokemon' is supported.
+        front_image:
+          $ref: "#/components/schemas/ImageInput"
+        back_image:
+          $ref: "#/components/schemas/ImageInput"
+          description: Optional. Not used in /v1/analyze currently.
+        client_reference:
+          type: string
+          description: Optional client-provided reference ID.
+
+    GradeRequest:
+      type: object
+      required:
+        - card_type
+        - front_image
+        - back_image
+      properties:
+        card_type:
+          type: string
+          enum:
+            - pokemon
+        front_image:
+          $ref: "#/components/schemas/ImageInput"
+        back_image:
+          $ref: "#/components/schemas/ImageInput"
+        client_reference:
+          type: string
+
+    AnalyzeResponse:
+      type: object
+      required:
+        - api_version
+        - request_id
+        - result
+      properties:
+        api_version:
+          type: string
+        request_id:
+          type: string
+        client_reference:
+          type: string
+        result:
+          type: object
+          description: Contains card_identity, condition_signals, gatekeeper_result, roi_result, processed_at.
+
+    GradeResponse:
+      type: object
+      required:
+        - api_version
+        - request_id
+        - result
+      properties:
+        api_version:
+          type: string
+        request_id:
+          type: string
+        client_reference:
+          type: string
+        result:
+          type: object
+          description: Contains distribution, centering, defects, photo_quality, explanations.
+
+    ErrorResponse:
+      type: object
+      required:
+        - api_version
+        - error_code
+        - error_message
+      properties:
+        api_version:
+          type: string
+        request_id:
+          type: string
+        error_code:
+          type: string
+          enum:
+            - INVALID_REQUEST_FORMAT
+            - MISSING_REQUIRED_FIELD
+            - INVALID_FIELD_VALUE
+            - INVALID_IMAGE_FORMAT
+            - IMAGE_TOO_LARGE
+            - UNSUPPORTED_CARD_TYPE
+            - MISSING_API_KEY
+            - INVALID_API_KEY
+            - RATE_LIMIT_EXCEEDED
+            - INTERNAL_ERROR
+            - SERVICE_UNAVAILABLE
+        error_message:
+          type: string
+        details:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              issue:
+                type: string
