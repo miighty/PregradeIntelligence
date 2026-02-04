@@ -21,6 +21,14 @@ from services.card_number import parse_card_number_from_crop
 from services.card_enrichment import enrich_identity
 from services.card_warp import warp_card_best_effort
 from services.card_identity_wotc import wotc_number_fallback
+from services.pokemon_names import (
+    get_all_pokemon_names,
+    get_owner_prefixes,
+    get_variant_prefixes,
+    get_mechanic_suffixes,
+    get_energy_types,
+    get_trainer_subtypes,
+)
 
 
 @dataclass(frozen=True)
@@ -61,58 +69,18 @@ TESSERACT_NAME_CONFIG = "--psm 7 --oem 1 -c preserve_interword_spaces=1"
 TESSERACT_NAME_CONFIG_SINGLE = "--psm 8 --oem 1"  # Single word mode
 TESSERACT_NUMBER_CONFIG = "--psm 7 --oem 1 -c tessedit_char_whitelist=0123456789/"
 
-# Common Pokemon names for fuzzy validation (subset of most common/iconic)
-# This helps validate OCR output without external API calls
-_POKEMON_NAMES: set[str] = {
-    # Gen 1
-    "bulbasaur", "ivysaur", "venusaur", "charmander", "charmeleon", "charizard",
-    "squirtle", "wartortle", "blastoise", "caterpie", "metapod", "butterfree",
-    "weedle", "kakuna", "beedrill", "pidgey", "pidgeotto", "pidgeot",
-    "rattata", "raticate", "spearow", "fearow", "ekans", "arbok",
-    "pikachu", "raichu", "sandshrew", "sandslash", "nidoran", "nidorina",
-    "nidoqueen", "nidorino", "nidoking", "clefairy", "clefable", "vulpix",
-    "ninetales", "jigglypuff", "wigglytuff", "zubat", "golbat", "oddish",
-    "gloom", "vileplume", "paras", "parasect", "venonat", "venomoth",
-    "diglett", "dugtrio", "meowth", "persian", "psyduck", "golduck",
-    "mankey", "primeape", "growlithe", "arcanine", "poliwag", "poliwhirl",
-    "poliwrath", "abra", "kadabra", "alakazam", "machop", "machoke",
-    "machamp", "bellsprout", "weepinbell", "victreebel", "tentacool", "tentacruel",
-    "geodude", "graveler", "golem", "ponyta", "rapidash", "slowpoke",
-    "slowbro", "magnemite", "magneton", "farfetchd", "doduo", "dodrio",
-    "seel", "dewgong", "grimer", "muk", "shellder", "cloyster",
-    "gastly", "haunter", "gengar", "onix", "drowzee", "hypno",
-    "krabby", "kingler", "voltorb", "electrode", "exeggcute", "exeggutor",
-    "cubone", "marowak", "hitmonlee", "hitmonchan", "lickitung", "koffing",
-    "weezing", "rhyhorn", "rhydon", "chansey", "tangela", "kangaskhan",
-    "horsea", "seadra", "goldeen", "seaking", "staryu", "starmie",
-    "mrmime", "scyther", "jynx", "electabuzz", "magmar", "pinsir",
-    "tauros", "magikarp", "gyarados", "lapras", "ditto", "eevee",
-    "vaporeon", "jolteon", "flareon", "porygon", "omanyte", "omastar",
-    "kabuto", "kabutops", "aerodactyl", "snorlax", "articuno", "zapdos",
-    "moltres", "dratini", "dragonair", "dragonite", "mewtwo", "mew",
-    # Gen 2
-    "chikorita", "bayleef", "meganium", "cyndaquil", "quilava", "typhlosion",
-    "totodile", "croconaw", "feraligatr", "sentret", "furret", "hoothoot",
-    "noctowl", "ledyba", "ledian", "spinarak", "ariados", "crobat",
-    "chinchou", "lanturn", "pichu", "cleffa", "igglybuff", "togepi",
-    "togetic", "natu", "xatu", "mareep", "flaaffy", "ampharos",
-    "bellossom", "marill", "azumarill", "sudowoodo", "politoed", "hoppip",
-    "skiploom", "jumpluff", "aipom", "sunkern", "sunflora", "yanma",
-    "wooper", "quagsire", "espeon", "umbreon", "murkrow", "slowking",
-    "misdreavus", "unown", "wobbuffet", "girafarig", "pineco", "forretress",
-    "dunsparce", "gligar", "steelix", "snubbull", "granbull", "qwilfish",
-    "scizor", "shuckle", "heracross", "sneasel", "teddiursa", "ursaring",
-    "slugma", "magcargo", "swinub", "piloswine", "corsola", "remoraid",
-    "octillery", "delibird", "mantine", "skarmory", "houndour", "houndoom",
-    "kingdra", "phanpy", "donphan", "porygon2", "stantler", "smeargle",
-    "tyrogue", "hitmontop", "smoochum", "elekid", "magby", "miltank",
-    "blissey", "raikou", "entei", "suicune", "larvitar", "pupitar",
-    "tyranitar", "lugia", "ho-oh", "celebi",
-    # Common modifiers and card types
-    "ex", "gx", "v", "vmax", "vstar", "lv", "delta", "dark", "light",
-    "shining", "rocket", "brock", "misty", "lt", "surge", "erika", "koga",
-    "sabrina", "blaine", "giovanni", "team", "aqua", "magma",
-}
+# Load comprehensive Pokemon names database (all 1025 species)
+_POKEMON_NAMES: set[str] = get_all_pokemon_names()
+
+# Load prefix/suffix registries for variant detection
+_OWNER_PREFIXES: set[str] = get_owner_prefixes()
+_VARIANT_PREFIXES: set[str] = get_variant_prefixes()
+_MECHANIC_SUFFIXES: set[str] = get_mechanic_suffixes()
+_ENERGY_TYPES: set[str] = get_energy_types()
+_TRAINER_SUBTYPES: set[str] = get_trainer_subtypes()
+
+# Combined prefixes for parsing
+_ALL_PREFIXES: set[str] = _OWNER_PREFIXES | _VARIANT_PREFIXES
 
 # Common OCR confusions to correct
 _OCR_CORRECTIONS: dict[str, str] = {
@@ -128,9 +96,93 @@ def _normalize_for_match(s: str) -> str:
     return s
 
 
-def _is_likely_pokemon_name(name: str) -> bool:
-    """Check if a name is likely a valid Pokemon name."""
-    norm = _normalize_for_match(name)
+def _normalize_preserve_spaces(s: str) -> str:
+    """Normalize a string preserving spaces for prefix/suffix matching."""
+    s = (s or "").strip().lower()
+    # Keep apostrophes and spaces for owner prefix matching
+    s = re.sub(r"[^a-z0-9\s'.\-]+", "", s)
+    # Collapse multiple spaces
+    s = " ".join(s.split())
+    return s
+
+
+def _extract_name_components(raw_name: str) -> tuple[list[str], str, list[str]]:
+    """
+    Extract prefixes, base Pokemon name, and suffixes from a card name.
+    
+    Returns: (prefixes, base_name, suffixes)
+    
+    Examples:
+        "Team Rocket's Mewtwo ex" -> (["team rocket's"], "mewtwo", ["ex"])
+        "Dark Charizard" -> (["dark"], "charizard", [])
+        "Pikachu VMAX" -> ([], "pikachu", ["vmax"])
+        "Alolan Ninetales GX" -> (["alolan"], "ninetales", ["gx"])
+    """
+    if not raw_name:
+        return [], "", []
+    
+    normalized = _normalize_preserve_spaces(raw_name)
+    words = normalized.split()
+    
+    if not words:
+        return [], "", []
+    
+    prefixes: list[str] = []
+    suffixes: list[str] = []
+    base_words: list[str] = []
+    
+    # Extract prefixes (check multi-word prefixes first)
+    i = 0
+    while i < len(words):
+        found_prefix = False
+        # Check 3-word prefixes first (e.g., "team rocket's")
+        for length in [3, 2, 1]:
+            if i + length <= len(words):
+                candidate = " ".join(words[i:i + length])
+                # Check owner prefixes
+                if candidate in _OWNER_PREFIXES or candidate + "'s" in _OWNER_PREFIXES:
+                    prefixes.append(candidate)
+                    i += length
+                    found_prefix = True
+                    break
+                # Check variant prefixes
+                if candidate in _VARIANT_PREFIXES:
+                    prefixes.append(candidate)
+                    i += length
+                    found_prefix = True
+                    break
+        if not found_prefix:
+            break
+    
+    # Extract suffixes from the end
+    j = len(words) - 1
+    while j >= i:
+        found_suffix = False
+        # Check multi-word suffixes (e.g., "tag team", "single strike")
+        for length in [2, 1]:
+            if j - length + 1 >= i:
+                candidate = " ".join(words[j - length + 1:j + 1])
+                if candidate in _MECHANIC_SUFFIXES:
+                    suffixes.insert(0, candidate)
+                    j -= length
+                    found_suffix = True
+                    break
+        if not found_suffix:
+            break
+    
+    # Remaining words are the base name
+    base_words = words[i:j + 1]
+    base_name = " ".join(base_words)
+    
+    return prefixes, base_name, suffixes
+
+
+def _validate_base_pokemon_name(base_name: str) -> bool:
+    """Check if a base name (without prefixes/suffixes) is a valid Pokemon name."""
+    if not base_name:
+        return False
+    
+    norm = _normalize_for_match(base_name)
     if not norm or len(norm) < 2:
         return False
     
@@ -138,11 +190,175 @@ def _is_likely_pokemon_name(name: str) -> bool:
     if norm in _POKEMON_NAMES:
         return True
     
-    # Check if any known name is a substring
+    # Check each word individually (for multi-word Pokemon names like "Mr. Mime")
+    words = base_name.lower().split()
+    for word in words:
+        word_norm = _normalize_for_match(word)
+        if word_norm and word_norm in _POKEMON_NAMES:
+            return True
+    
+    # Substring match for partial OCR errors
+    for pname in _POKEMON_NAMES:
+        if len(pname) >= 5 and pname in norm:
+            return True
+        if len(norm) >= 5 and norm in pname:
+            return True
+    
+    return False
+
+
+def _reconstruct_card_name(prefixes: list[str], base_name: str, suffixes: list[str]) -> str:
+    """Reconstruct a properly formatted card name from components."""
+    parts = []
+    
+    # Format prefixes with proper capitalization
+    for prefix in prefixes:
+        if "'" in prefix:
+            # Owner prefix: "Team Rocket's" -> "Team Rocket's"
+            formatted = " ".join(word.capitalize() if not word.endswith("'s") else 
+                                word[:-2].capitalize() + "'s" 
+                                for word in prefix.split())
+        else:
+            # Variant prefix: "dark" -> "Dark"
+            formatted = prefix.title()
+        parts.append(formatted)
+    
+    # Format base name
+    if base_name:
+        parts.append(base_name.title())
+    
+    # Format suffixes (many are uppercase by convention)
+    for suffix in suffixes:
+        suffix_upper = suffix.upper()
+        if suffix_upper in {"EX", "GX", "V", "VMAX", "VSTAR", "LV.X", "BREAK", "LEGEND", "PRIME"}:
+            parts.append(suffix_upper)
+        elif suffix_upper in {"TAG TEAM", "SINGLE STRIKE", "RAPID STRIKE", "FUSION STRIKE"}:
+            parts.append(suffix.title())
+        else:
+            parts.append(suffix.lower())
+    
+    return " ".join(parts)
+
+
+def _detect_card_type_from_text(text: str) -> str:
+    """
+    Detect card type (pokemon, trainer, energy) from OCR text.
+    
+    Returns: "pokemon", "trainer", "energy", or "unknown"
+    """
+    if not text:
+        return "unknown"
+    
+    text_lower = text.lower()
+    
+    # Check for Trainer card indicators
+    if "trainer" in text_lower:
+        return "trainer"
+    
+    # Check for trainer subtypes
+    for subtype in _TRAINER_SUBTYPES:
+        if subtype in text_lower:
+            return "trainer"
+    
+    # Check for Energy card indicators
+    if "energy" in text_lower:
+        # Could be Energy card or just energy cost text
+        # Look for more specific patterns
+        if re.search(r'\b(basic|special)\s+energy\b', text_lower):
+            return "energy"
+        # Check if it's just a Pokemon with energy type
+        for etype in _ENERGY_TYPES:
+            if f"{etype} energy" in text_lower:
+                return "energy"
+    
+    # Check for Pokemon indicators (HP, attacks, etc.)
+    if re.search(r'\bhp\s*\d+|\d+\s*hp\b', text_lower):
+        return "pokemon"
+    
+    # Check if text contains a known Pokemon name
+    for pname in _POKEMON_NAMES:
+        if len(pname) >= 4 and pname in _normalize_for_match(text):
+            return "pokemon"
+    
+    return "unknown"
+
+
+def _detect_trainer_subtype(text: str) -> Optional[str]:
+    """
+    Detect the subtype of a Trainer card from OCR text.
+    
+    Returns: "item", "supporter", "stadium", "pokemon_tool", 
+             "technical_machine", "ace_spec", or None
+    """
+    if not text:
+        return None
+    
+    text_lower = text.lower()
+    
+    # Check for specific subtype indicators
+    if "supporter" in text_lower:
+        return "supporter"
+    if "stadium" in text_lower:
+        return "stadium"
+    if "pokemon tool" in text_lower or "pokémon tool" in text_lower:
+        return "pokemon_tool"
+    if "technical machine" in text_lower or " tm " in text_lower:
+        return "technical_machine"
+    if "ace spec" in text_lower or "acespec" in text_lower:
+        return "ace_spec"
+    if "item" in text_lower:
+        return "item"
+    
+    # Default to unknown if no specific subtype detected
+    return None
+
+
+def _is_likely_pokemon_name(name: str) -> bool:
+    """
+    Check if a name is likely a valid Pokemon card name.
+    
+    Handles various formats:
+    - Simple names: "Pikachu", "Charizard"
+    - Owner prefixes: "Brock's Onix", "Team Rocket's Mewtwo"
+    - Variant prefixes: "Dark Charizard", "Alolan Ninetales"
+    - Mechanic suffixes: "Pikachu ex", "Charizard VMAX"
+    - Combinations: "Dark Alakazam ex", "Team Rocket's Mewtwo GX"
+    """
+    if not name:
+        return False
+    
+    norm = _normalize_for_match(name)
+    if not norm or len(norm) < 2:
+        return False
+    
+    # Direct match against Pokemon names
+    if norm in _POKEMON_NAMES:
+        return True
+
+    # Allow known prefixes/suffixes to count as "Pokemon-like" tokens in isolation
+    # (useful for validating OCR fragments like "ex", "GX", "Dark").
+    if norm in _VARIANT_PREFIXES or norm in _MECHANIC_SUFFIXES:
+        return True
+    
+    # Try decomposing into components
+    prefixes, base_name, suffixes = _extract_name_components(name)
+    
+    # If we found a valid base Pokemon name with recognized prefixes/suffixes, it's valid
+    if base_name and _validate_base_pokemon_name(base_name):
+        return True
+    
+    # Check if any known Pokemon name appears as a substring
     for pname in _POKEMON_NAMES:
         if len(pname) >= 4 and pname in norm:
             return True
         if len(norm) >= 4 and norm in pname:
+            return True
+    
+    # Check individual words for Pokemon names
+    words = name.lower().split()
+    for word in words:
+        word_norm = _normalize_for_match(word)
+        if word_norm in _POKEMON_NAMES:
             return True
     
     return False
@@ -188,6 +404,8 @@ def extract_card_identity(image: Image.Image) -> CardIdentity:
             details={"trace": {"skipped": True, "reason": "test_or_config"}},
             confidence=0.0,
             match_method=f"ocr_extraction:{image_hash[:16]}:skipped",
+            card_type="unknown",
+            trainer_subtype=None,
         )
 
     rgb_image = image.convert('RGB') if image.mode != 'RGB' else image
@@ -358,6 +576,29 @@ def extract_card_identity(image: Image.Image) -> CardIdentity:
             )
 
     confidence = _calculate_confidence(card_name, card_number)
+    
+    # Detect card type from full-card OCR (best effort)
+    # This helps categorize Trainer and Energy cards
+    detected_card_type = "pokemon"  # Default assumption
+    trainer_subtype = None
+    
+    try:
+        full_ocr_text = pytesseract.image_to_string(
+            working_image, lang=TESSERACT_LANG, config="--psm 6 --oem 1"
+        )
+        detected_card_type = _detect_card_type_from_text(full_ocr_text)
+        
+        # If detected as trainer, try to identify subtype
+        if detected_card_type == "trainer":
+            trainer_subtype = _detect_trainer_subtype(full_ocr_text)
+    except Exception:
+        # OCR failed, keep defaults
+        pass
+    
+    # If we found a valid Pokemon name, it's likely a Pokemon card
+    if _is_likely_pokemon_name(card_name):
+        detected_card_type = "pokemon"
+    
     trace = {
         "warp_used": warp_used,
         "warp_reason": warp_reason,
@@ -365,6 +606,7 @@ def extract_card_identity(image: Image.Image) -> CardIdentity:
         "template_family": template_family,
         "number_candidates": number_candidates,
         "number_region_selected": best_region or "none",
+        "detected_card_type": detected_card_type,
     }
     
     identity = CardIdentity(
@@ -374,7 +616,9 @@ def extract_card_identity(image: Image.Image) -> CardIdentity:
         variant=None,
         details={"trace": trace},
         confidence=confidence,
-        match_method=f"ocr_extraction:{image_hash[:16]}:{best_region or 'none'}:{warp_reason}"
+        match_method=f"ocr_extraction:{image_hash[:16]}:{best_region or 'none'}:{warp_reason}",
+        card_type=detected_card_type,
+        trainer_subtype=trainer_subtype,
     )
 
     # Best-effort enrichment (set + structured fields) via TCGdex.
@@ -666,27 +910,35 @@ def _best_name_from_list(candidates: list[str]) -> str:
 def _parse_card_name(raw_text: str) -> str:
     """Parse card name from OCR text.
 
+    Handles various Pokemon TCG card name formats:
+    - Simple names: "Pikachu", "Charizard"
+    - Owner prefixes: "Brock's Onix", "Team Rocket's Mewtwo"
+    - Variant prefixes: "Dark Charizard", "Alolan Ninetales"
+    - Mechanic suffixes: "Pikachu ex", "Charizard VMAX"
+    - Combinations: "Dark Alakazam ex", "Team Rocket's Mewtwo GX"
+    
+    Supports names up to 6 words and 50 characters.
+
     We intentionally try to drop common template noise like:
     - "Evolves from ..."
     - "Basic" / "Stage 1" / "Stage 2"
     - HP values, attack names
-    and keep the leftmost part which usually contains the card name.
     """
     if not raw_text:
         return ""
 
     first_line = raw_text.split("\n")[0].strip()
 
-    # Keep only plausible characters.
-    cleaned = re.sub(r"[^A-Za-z\s'\-éÉ]", " ", first_line)
+    # Keep only plausible characters (including apostrophes for owner names)
+    cleaned = re.sub(r"[^A-Za-z\s'\-éÉ.]", " ", first_line)
     cleaned = " ".join(cleaned.split())
 
     # Strip common template phrases.
     lowered = cleaned.lower()
     noise_tokens = [
-        "evolves from", "basic", "stage", "from", "hp ", " hp",
-        "weakness", "resistance", "retreat", "pokemon",
-        "put", "damage", "attack", "energy", "trainer",
+        "evolves from", "stage 2", "stage 1", "stage", "basic pokemon",
+        "from", "hp ", " hp", "weakness", "resistance", "retreat",
+        "put", "damage", "attack",
     ]
     for token in noise_tokens:
         idx = lowered.find(token)
@@ -694,33 +946,66 @@ def _parse_card_name(raw_text: str) -> str:
             cleaned = cleaned[:idx].strip()
             lowered = cleaned.lower()
 
-    # If we still have multiple words, prefer the first 1–3 words as name.
     parts = cleaned.split()
     if not parts:
         return ""
 
-    # Try different word combinations and pick the one most likely to be a Pokemon
+    # Increased limit: support up to 6 words for complex names
+    # e.g., "Team Rocket's Dark Alakazam ex"
+    max_words = min(7, len(parts) + 1)
+    
     best_name = ""
     best_score = -1
     
-    for num_words in range(1, min(4, len(parts) + 1)):
+    # Try different word combinations, preferring longer valid names
+    for num_words in range(1, max_words):
         candidate = " ".join(parts[:num_words])
-        score = _score_name_candidate(candidate)
-        if score > best_score:
-            best_score = score
-            best_name = candidate
+        
+        # Skip if candidate exceeds 50 character limit
+        if len(candidate) > 50:
+            continue
+        
+        # Try to decompose and validate
+        prefixes, base_name, suffixes = _extract_name_components(candidate)
+        
+        # Strong preference if we can extract a valid base Pokemon name
+        if base_name and _validate_base_pokemon_name(base_name):
+            reconstructed = _reconstruct_card_name(prefixes, base_name, suffixes)
+            # Score boost for having recognizable structure
+            score = _score_name_candidate(candidate) + 15.0
+            if prefixes:
+                score += 5.0  # Bonus for recognized prefix
+            if suffixes:
+                score += 3.0  # Bonus for recognized suffix
+            if score > best_score:
+                best_score = score
+                best_name = reconstructed if reconstructed else candidate
+        else:
+            score = _score_name_candidate(candidate)
+            if score > best_score:
+                best_score = score
+                best_name = candidate
     
     # Apply OCR corrections if the result doesn't look like a Pokemon name
     if not _is_likely_pokemon_name(best_name):
         corrected = _correct_ocr_confusions(best_name)
         if _is_likely_pokemon_name(corrected):
-            best_name = corrected.title()  # Capitalize properly
+            # Re-parse with corrections to get proper formatting
+            prefixes, base_name, suffixes = _extract_name_components(corrected)
+            if base_name:
+                best_name = _reconstruct_card_name(prefixes, base_name, suffixes)
+            else:
+                best_name = corrected.title()
     
     return best_name
 
 
 def _score_name_candidate(name: str) -> float:
-    """Score a name candidate for likelihood of being a valid Pokemon card name."""
+    """Score a name candidate for likelihood of being a valid Pokemon card name.
+    
+    Supports longer names (up to 50 chars) with owner prefixes, variant prefixes,
+    and mechanic suffixes.
+    """
     if not name:
         return 0.0
     
@@ -728,46 +1013,72 @@ def _score_name_candidate(name: str) -> float:
     norm = _normalize_for_match(name)
     words = name.lower().split()
     
-    # Length scoring (prefer reasonable lengths)
-    if 3 <= len(name) <= 25:
+    # Length scoring - increased to support longer variant names
+    # e.g., "Team Rocket's Mewtwo ex" = 24 chars
+    if 3 <= len(name) <= 50:
         score += 2.0
-    elif len(name) > 25:
+        # Slight preference for moderate lengths
+        if 5 <= len(name) <= 30:
+            score += 1.0
+    elif len(name) > 50:
         score -= 1.0
     
-    # Alphabetic density (prefer mostly letters)
-    alpha_ratio = sum(1 for c in name if c.isalpha()) / max(len(name), 1)
+    # Alphabetic density (prefer mostly letters, allow apostrophes and spaces)
+    valid_chars = sum(1 for c in name if c.isalpha() or c in " '-.")
+    alpha_ratio = valid_chars / max(len(name), 1)
     score += alpha_ratio * 3.0
     
-    # Known Pokemon name bonus - check individual words
-    pokemon_match_count = 0
-    for word in words:
-        word_norm = _normalize_for_match(word)
-        if word_norm in _POKEMON_NAMES:
-            pokemon_match_count += 1
-            # Higher bonus for actual Pokemon names vs modifiers
-            if word_norm not in {"ex", "gx", "v", "vmax", "vstar", "lv", "delta", "dark", "light",
-                                  "shining", "rocket", "brock", "misty", "lt", "surge", "erika",
-                                  "koga", "sabrina", "blaine", "giovanni", "team", "aqua", "magma"}:
+    # Try to decompose into components for structured scoring
+    prefixes, base_name, suffixes = _extract_name_components(name)
+    
+    # Strong bonus for valid base Pokemon name
+    if base_name and _validate_base_pokemon_name(base_name):
+        score += 12.0
+        # Additional bonus for recognized prefixes
+        if prefixes:
+            score += 4.0 * len(prefixes)
+        # Additional bonus for recognized suffixes  
+        if suffixes:
+            score += 3.0 * len(suffixes)
+    else:
+        # Fallback: check individual words
+        pokemon_match_count = 0
+        modifier_match_count = 0
+        
+        for word in words:
+            word_norm = _normalize_for_match(word)
+            if word_norm in _POKEMON_NAMES:
+                pokemon_match_count += 1
                 score += 10.0  # Full Pokemon name
-            else:
-                score += 3.0   # Modifier/prefix
-    
-    # Bonus for multi-word names with Pokemon matches (like "Dark Charizard")
-    if pokemon_match_count >= 2:
-        score += 5.0
-    
-    # Substring match fallback
-    if pokemon_match_count == 0:
-        for pname in _POKEMON_NAMES:
-            if len(pname) >= 5 and (pname in norm or norm in pname):
-                score += 5.0
-                break
+            elif word_norm in _MECHANIC_SUFFIXES:
+                modifier_match_count += 1
+                score += 2.0   # Mechanic suffix
+            elif word in _normalize_preserve_spaces(name):
+                # Check against variant/owner prefixes
+                for prefix in _ALL_PREFIXES:
+                    if word_norm in _normalize_for_match(prefix):
+                        modifier_match_count += 1
+                        score += 2.0
+                        break
+        
+        # Bonus for multi-word names with Pokemon matches (like "Dark Charizard")
+        if pokemon_match_count >= 1 and modifier_match_count >= 1:
+            score += 5.0
+        
+        # Substring match fallback
+        if pokemon_match_count == 0:
+            for pname in _POKEMON_NAMES:
+                if len(pname) >= 5 and (pname in norm or norm in pname):
+                    score += 5.0
+                    break
     
     # Penalize garbage patterns
-    if re.search(r"[A-Z]{4,}", name):  # Many consecutive capitals
+    if re.search(r"[A-Z]{5,}", name):  # Many consecutive capitals (increased threshold)
         score -= 2.0
-    if re.search(r"(.)\1{2,}", name.lower()):  # Repeated characters
+    if re.search(r"(.)\1{3,}", name.lower()):  # 4+ repeated characters
         score -= 2.0
+    if re.search(r"\d{3,}", name):  # 3+ consecutive digits
+        score -= 3.0
     
     return score
 
@@ -1053,7 +1364,9 @@ def _empty_identity(image_bytes: bytes) -> CardIdentity:
         variant=None,
         details={},
         confidence=0.0,
-        match_method=f"ocr_extraction_failed:{content_hash[:16]}"
+        match_method=f"ocr_extraction_failed:{content_hash[:16]}",
+        card_type="unknown",
+        trainer_subtype=None,
     )
 
 
@@ -1067,5 +1380,7 @@ def _empty_identity_from_path(image_path: str) -> CardIdentity:
         variant=None,
         details={},
         confidence=0.0,
-        match_method=f"ocr_extraction_failed:{path_hash[:16]}"
+        match_method=f"ocr_extraction_failed:{path_hash[:16]}",
+        card_type="unknown",
+        trainer_subtype=None,
     )

@@ -341,12 +341,13 @@ def _handle_analyze(event: dict[str, Any]) -> dict[str, Any]:
         return response(400, err.to_dict())
 
     card_type = payload.get("card_type")
-    if card_type != "pokemon":
+    supported_types = {"pokemon", "trainer", "energy"}
+    if card_type not in supported_types:
         err = ErrorResponse(
             api_version=_API_VERSION,
             request_id=None,
             error_code=ErrorCode.UNSUPPORTED_CARD_TYPE.value,
-            error_message="Only card_type='pokemon' is supported.",
+            error_message=f"Only card_type in {sorted(supported_types)} is supported.",
         )
         return response(400, err.to_dict())
 

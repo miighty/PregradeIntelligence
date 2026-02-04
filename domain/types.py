@@ -10,7 +10,35 @@ PreGrade does NOT assign grades or act as an authority.
 
 from dataclasses import dataclass, field, asdict
 from typing import Optional, Any
+from enum import Enum
 import json
+
+
+class CardType(str, Enum):
+    """
+    Classification of trading card types.
+    
+    This is used to categorize cards for appropriate processing.
+    """
+    POKEMON = "pokemon"
+    TRAINER = "trainer"
+    ENERGY = "energy"
+    UNKNOWN = "unknown"
+
+
+class TrainerSubtype(str, Enum):
+    """
+    Subtypes for Trainer cards.
+    
+    Trainer cards have different rules based on their subtype.
+    """
+    ITEM = "item"
+    SUPPORTER = "supporter"
+    STADIUM = "stadium"
+    POKEMON_TOOL = "pokemon_tool"
+    TECHNICAL_MACHINE = "technical_machine"
+    ACE_SPEC = "ace_spec"
+    UNKNOWN = "unknown"
 
 
 @dataclass(frozen=True)
@@ -20,13 +48,30 @@ class CardIdentity:
     
     This represents the system's best identification of the card,
     along with confidence and traceability information.
+    
+    Supports Pokemon cards, Trainer cards, and Energy cards with
+    proper handling of owner prefixes (e.g., "Team Rocket's"),
+    variant prefixes (e.g., "Dark", "Alolan"), and mechanic
+    suffixes (e.g., "ex", "VMAX").
     """
     
     set_name: str
     """The name of the card set (e.g., 'Base Set', 'Evolving Skies')."""
     
     card_name: str
-    """The name of the card (e.g., 'Charizard', 'Pikachu')."""
+    """
+    The name of the card.
+    
+    For Pokemon cards, includes prefixes and suffixes:
+    - Simple: 'Charizard', 'Pikachu'
+    - Owner prefix: "Team Rocket's Mewtwo", "Brock's Onix"
+    - Variant prefix: 'Dark Charizard', 'Alolan Ninetales'
+    - Mechanic suffix: 'Pikachu ex', 'Charizard VMAX'
+    - Combined: "Team Rocket's Dark Alakazam ex"
+    
+    For Trainer cards: the trainer card name (e.g., 'Professor Oak', 'Rare Candy')
+    For Energy cards: the energy type (e.g., 'Fire Energy', 'Double Colorless Energy')
+    """
     
     card_number: Optional[str]
     """The card number within the set, if available."""
@@ -42,6 +87,18 @@ class CardIdentity:
 
     details: dict[str, Any] = field(default_factory=dict)
     """Extra structured details about the card (set id, rarity, types, etc.)."""
+    
+    card_type: str = "pokemon"
+    """
+    The type of card: 'pokemon', 'trainer', 'energy', or 'unknown'.
+    Defaults to 'pokemon' for backward compatibility.
+    """
+    
+    trainer_subtype: Optional[str] = None
+    """
+    For Trainer cards, the subtype: 'item', 'supporter', 'stadium',
+    'pokemon_tool', 'technical_machine', 'ace_spec', or None.
+    """
 
     def to_dict(self) -> dict:
         """Convert to JSON-serialisable dictionary."""

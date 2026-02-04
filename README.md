@@ -161,6 +161,27 @@ Identity batch eval (JSON + warp trace):
 Optional debug crops for failed number extraction:
 - `PREGRADE_DEBUG_NUMBER_CROPS=1 python -m eval.number_hit_rate_warped --front-dir /path/to/images`
 
+## Demo UI
+
+A web-based demo for client presentations is available in `demo/`.
+
+To run locally:
+
+```bash
+# Install dependencies (if not already done)
+pip install flask flask-cors
+
+# Start the demo server
+python demo/server.py
+```
+
+Then open **http://localhost:5000** in your browser. Upload front and back images to see:
+
+- Grade distribution (likelihood of PSA 10/9/8/7-)
+- Centering analysis (L/R and T/B percentages)
+- Condition signals (corners, edges, surface)
+- Photo quality metrics
+
 ## Node/TypeScript gateway (PRD-alignment, staged)
 
 The PRD target includes a Node.js + TypeScript gateway (Fastify/Nest). To avoid a Python→Node big-bang rewrite, a **minimal Fastify TypeScript skeleton** lives in:

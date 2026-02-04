@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PreGrade Demo</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      min-height: 100vh;
+      margin: 0;
+      padding: 24px;
+      color: #e8e8e8;
+    }
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    header {
+      text-align: center;
+      margin-bottom: 32px;
+    }
+    header h1 {
+      font-size: 2.5rem;
+      margin: 0 0 8px 0;
+      background: linear-gradient(90deg, #00d4ff, #7b2cbf);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    header p {
+      opacity: 0.7;
+      margin: 0;
+    }
+    .upload-section {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+      margin-bottom: 24px;
+    }
+    .upload-box {
+      background: rgba(255,255,255,0.05);
+      border: 2px dashed rgba(255,255,255,0.2);
+      border-radius: 12px;
+      padding: 24px;
+      text-align: center;
+      transition: all 0.3s;
+      cursor: pointer;
+    }
+    .upload-box:hover {
+      border-color: #00d4ff;
+      background: rgba(0,212,255,0.05);
+    }
+    .upload-box.has-image {
+      border-style: solid;
+      border-color: #00d4ff;
+    }
+    .upload-box h3 {
+      margin: 0 0 12px 0;
+      font-size: 1.1rem;
+    }
+    .upload-box input {
+      display: none;
+    }
+    .upload-box img {
+      max-width: 100%;
+      max-height: 300px;
+      border-radius: 8px;
+      margin-top: 12px;
+    }
+    .upload-icon {
+      font-size: 3rem;
+      opacity: 0.5;
+    }
+    .actions {
+      text-align: center;
+      margin-bottom: 32px;
+    }
+    button {
+      background: linear-gradient(90deg, #00d4ff, #7b2cbf);
+      color: white;
+      border: none;
+      padding: 14px 48px;
+      font-size: 1.1rem;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    button:hover:not(:disabled) {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 24px rgba(0,212,255,0.3);
+    }
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .results {
+      display: none;
+    }
+    .results.visible {
+      display: block;
+    }
+    .results-header {
+      text-align: center;
+      margin-bottom: 24px;
+    }
+    .results-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 20px;
+    }
+    .card {
+      background: rgba(255,255,255,0.05);
+      border-radius: 12px;
+      padding: 20px;
+      border: 1px solid rgba(255,255,255,0.1);
+    }
+    .card h3 {
+      margin: 0 0 16px 0;
+      font-size: 1rem;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      opacity: 0.7;
+    }
+    .distribution-bar {
+      display: flex;
+      height: 32px;
+      border-radius: 6px;
+      overflow: hidden;
+      margin-bottom: 12px;
+    }
+    .distribution-bar > div {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: white;
+      min-width: 0;
+    }
+    .dist-10 { background: #10b981; }
+    .dist-9 { background: #3b82f6; }
+    .dist-8 { background: #f59e0b; }
+    .dist-7 { background: #ef4444; }
+    .distribution-legend {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.85rem;
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .legend-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 3px;
+    }
+    .centering-visual {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+    .centering-card {
+      background: rgba(0,0,0,0.2);
+      border-radius: 8px;
+      padding: 12px;
+      text-align: center;
+    }
+    .centering-card h4 {
+      margin: 0 0 8px 0;
+      font-size: 0.9rem;
+      opacity: 0.8;
+    }
+    .centering-values {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: #00d4ff;
+    }
+    .centering-label {
+      font-size: 0.75rem;
+      opacity: 0.6;
+      margin-top: 4px;
+    }
+    .severity-bar {
+      height: 8px;
+      background: rgba(255,255,255,0.1);
+      border-radius: 4px;
+      overflow: hidden;
+      margin: 8px 0;
+    }
+    .severity-fill {
+      height: 100%;
+      border-radius: 4px;
+      transition: width 0.5s;
+    }
+    .severity-none { background: #10b981; }
+    .severity-minor { background: #f59e0b; }
+    .severity-moderate { background: #f97316; }
+    .severity-significant { background: #ef4444; }
+    .defect-item {
+      margin-bottom: 16px;
+    }
+    .defect-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 4px;
+    }
+    .defect-name {
+      font-weight: 600;
+      text-transform: capitalize;
+    }
+    .defect-severity {
+      font-size: 0.8rem;
+      padding: 2px 8px;
+      border-radius: 4px;
+      text-transform: uppercase;
+    }
+    .defect-severity.none { background: rgba(16,185,129,0.2); color: #10b981; }
+    .defect-severity.minor { background: rgba(245,158,11,0.2); color: #f59e0b; }
+    .defect-severity.moderate { background: rgba(249,115,22,0.2); color: #f97316; }
+    .defect-severity.significant { background: rgba(239,68,68,0.2); color: #ef4444; }
+    .defect-observation {
+      font-size: 0.85rem;
+      opacity: 0.7;
+      margin-top: 4px;
+    }
+    .photo-quality-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+    }
+    .pq-item {
+      background: rgba(0,0,0,0.2);
+      border-radius: 8px;
+      padding: 12px;
+      text-align: center;
+    }
+    .pq-value {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: #00d4ff;
+    }
+    .pq-label {
+      font-size: 0.75rem;
+      opacity: 0.6;
+      margin-top: 4px;
+      text-transform: capitalize;
+    }
+    .usable-badge {
+      display: inline-block;
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-weight: 600;
+      margin-top: 12px;
+    }
+    .usable-badge.yes { background: rgba(16,185,129,0.2); color: #10b981; }
+    .usable-badge.no { background: rgba(239,68,68,0.2); color: #ef4444; }
+    .loading {
+      display: none;
+      text-align: center;
+      padding: 48px;
+    }
+    .loading.visible {
+      display: block;
+    }
+    .spinner {
+      width: 48px;
+      height: 48px;
+      border: 4px solid rgba(255,255,255,0.1);
+      border-top-color: #00d4ff;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 16px;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    .error {
+      background: rgba(239,68,68,0.1);
+      border: 1px solid rgba(239,68,68,0.3);
+      color: #ef4444;
+      padding: 16px;
+      border-radius: 8px;
+      text-align: center;
+      display: none;
+    }
+    .error.visible {
+      display: block;
+    }
+    .psa-max {
+      font-size: 3rem;
+      font-weight: 700;
+      text-align: center;
+      background: linear-gradient(90deg, #00d4ff, #7b2cbf);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .psa-label {
+      text-align: center;
+      opacity: 0.7;
+      font-size: 0.9rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>PreGrade</h1>
+      <p>Decision Intelligence for Trading Card Analysis</p>
+    </header>
+
+    <div class="upload-section">
+      <label class="upload-box" id="front-box">
+        <h3>Front Image</h3>
+        <div class="upload-icon">+</div>
+        <p>Click to upload</p>
+        <input type="file" id="front-input" accept="image/*">
+        <img id="front-preview" style="display:none">
+      </label>
+      <label class="upload-box" id="back-box">
+        <h3>Back Image</h3>
+        <div class="upload-icon">+</div>
+        <p>Click to upload</p>
+        <input type="file" id="back-input" accept="image/*">
+        <img id="back-preview" style="display:none">
+      </label>
+    </div>
+
+    <div class="actions">
+      <button id="analyze-btn" disabled>Analyze Card</button>
+    </div>
+
+    <div class="loading" id="loading">
+      <div class="spinner"></div>
+      <p>Analyzing your card...</p>
+    </div>
+
+    <div class="error" id="error"></div>
+
+    <div class="results" id="results">
+      <div class="results-header">
+        <h2>Analysis Results</h2>
+      </div>
+      <div class="results-grid">
+        <div class="card">
+          <h3>Centering Max Grade</h3>
+          <div class="psa-max" id="psa-max">-</div>
+          <div class="psa-label">Based on centering alone</div>
+        </div>
+
+        <div class="card">
+          <h3>Grade Distribution</h3>
+          <div class="distribution-bar" id="dist-bar"></div>
+          <div class="distribution-legend">
+            <span class="legend-item"><span class="legend-dot dist-10"></span> 10</span>
+            <span class="legend-item"><span class="legend-dot dist-9"></span> 9</span>
+            <span class="legend-item"><span class="legend-dot dist-8"></span> 8</span>
+            <span class="legend-item"><span class="legend-dot dist-7"></span> 7-</span>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>Centering</h3>
+          <div class="centering-visual">
+            <div class="centering-card">
+              <h4>Front L/R</h4>
+              <div class="centering-values" id="front-lr">-</div>
+              <div class="centering-label">left / right</div>
+            </div>
+            <div class="centering-card">
+              <h4>Front T/B</h4>
+              <div class="centering-values" id="front-tb">-</div>
+              <div class="centering-label">top / bottom</div>
+            </div>
+            <div class="centering-card">
+              <h4>Back L/R</h4>
+              <div class="centering-values" id="back-lr">-</div>
+              <div class="centering-label">left / right</div>
+            </div>
+            <div class="centering-card">
+              <h4>Back T/B</h4>
+              <div class="centering-values" id="back-tb">-</div>
+              <div class="centering-label">top / bottom</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>Condition Signals</h3>
+          <div id="defects-list"></div>
+        </div>
+
+        <div class="card">
+          <h3>Photo Quality</h3>
+          <div class="photo-quality-grid" id="pq-grid"></div>
+          <div style="text-align:center">
+            <div class="usable-badge" id="usable-badge">-</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let frontData = null;
+    let backData = null;
+
+    const frontInput = document.getElementById('front-input');
+    const backInput = document.getElementById('back-input');
+    const frontPreview = document.getElementById('front-preview');
+    const backPreview = document.getElementById('back-preview');
+    const frontBox = document.getElementById('front-box');
+    const backBox = document.getElementById('back-box');
+    const analyzeBtn = document.getElementById('analyze-btn');
+
+    function handleFile(input, preview, box, isBack) {
+      const file = input.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const base64 = e.target.result.split(',')[1];
+        if (isBack) {
+          backData = base64;
+        } else {
+          frontData = base64;
+        }
+        preview.src = e.target.result;
+        preview.style.display = 'block';
+        box.classList.add('has-image');
+        box.querySelector('.upload-icon').style.display = 'none';
+        box.querySelector('p').style.display = 'none';
+        updateButton();
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function updateButton() {
+      analyzeBtn.disabled = !(frontData && backData);
+    }
+
+    frontInput.addEventListener('change', () => handleFile(frontInput, frontPreview, frontBox, false));
+    backInput.addEventListener('change', () => handleFile(backInput, backPreview, backBox, true));
+
+    analyzeBtn.addEventListener('click', async () => {
+      const loading = document.getElementById('loading');
+      const results = document.getElementById('results');
+      const error = document.getElementById('error');
+
+      loading.classList.add('visible');
+      results.classList.remove('visible');
+      error.classList.remove('visible');
+
+      try {
+        const resp = await fetch('/v1/grade', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            card_type: 'pokemon',
+            front_image: { encoding: 'base64', data: frontData },
+            back_image: { encoding: 'base64', data: backData },
+          }),
+        });
+
+        const data = await resp.json();
+
+        if (!resp.ok) {
+          throw new Error(data.error_message || 'Analysis failed');
+        }
+
+        displayResults(data.result);
+        results.classList.add('visible');
+      } catch (err) {
+        error.textContent = err.message;
+        error.classList.add('visible');
+      } finally {
+        loading.classList.remove('visible');
+      }
+    });
+
+    function displayResults(result) {
+      // PSA Max
+      const psaMax = result.centering?.psa_centering_max ?? '-';
+      document.getElementById('psa-max').textContent = psaMax;
+
+      // Distribution
+      const dist = result.distribution || {};
+      const distBar = document.getElementById('dist-bar');
+      const p10 = (dist.psa_10 || 0) * 100;
+      const p9 = (dist.psa_9 || 0) * 100;
+      const p8 = (dist.psa_8 || 0) * 100;
+      const p7 = (dist.psa_7_or_lower || 0) * 100;
+      distBar.innerHTML = `
+        <div class="dist-10" style="width:${p10}%">${p10 > 10 ? Math.round(p10) + '%' : ''}</div>
+        <div class="dist-9" style="width:${p9}%">${p9 > 10 ? Math.round(p9) + '%' : ''}</div>
+        <div class="dist-8" style="width:${p8}%">${p8 > 10 ? Math.round(p8) + '%' : ''}</div>
+        <div class="dist-7" style="width:${p7}%">${p7 > 10 ? Math.round(p7) + '%' : ''}</div>
+      `;
+
+      // Centering
+      const cent = result.centering || {};
+      const fmtCent = (arr) => arr ? `${arr[0].toFixed(1)}/${arr[1].toFixed(1)}` : '-';
+      document.getElementById('front-lr').textContent = fmtCent(cent.front_lr);
+      document.getElementById('front-tb').textContent = fmtCent(cent.front_tb);
+      document.getElementById('back-lr').textContent = fmtCent(cent.back_lr);
+      document.getElementById('back-tb').textContent = fmtCent(cent.back_tb);
+
+      // Defects
+      const defects = result.defects || {};
+      const defectsList = document.getElementById('defects-list');
+      const severityToPercent = (sev) => Math.min(sev * 100, 100);
+      const severityToLabel = (sev) => {
+        if (sev >= 0.75) return 'significant';
+        if (sev >= 0.50) return 'moderate';
+        if (sev >= 0.25) return 'minor';
+        return 'none';
+      };
+
+      defectsList.innerHTML = ['corners', 'edges', 'surface'].map(type => {
+        const sev = defects[type + '_severity'] || 0;
+        const label = severityToLabel(sev);
+        return `
+          <div class="defect-item">
+            <div class="defect-header">
+              <span class="defect-name">${type}</span>
+              <span class="defect-severity ${label}">${label}</span>
+            </div>
+            <div class="severity-bar">
+              <div class="severity-fill severity-${label}" style="width:${severityToPercent(sev)}%"></div>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      // Photo Quality
+      const pq = result.photo_quality || {};
+      const pqGrid = document.getElementById('pq-grid');
+      pqGrid.innerHTML = ['blur', 'glare', 'occlusion'].map(key => `
+        <div class="pq-item">
+          <div class="pq-value">${((pq[key] || 0) * 100).toFixed(0)}%</div>
+          <div class="pq-label">${key}</div>
+        </div>
+      `).join('');
+
+      const usableBadge = document.getElementById('usable-badge');
+      usableBadge.textContent = pq.usable ? 'Usable' : 'Not Usable';
+      usableBadge.className = 'usable-badge ' + (pq.usable ? 'yes' : 'no');
+    }
+  </script>
+</body>
+</html>

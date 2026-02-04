@@ -29,9 +29,16 @@ import json
 class CardType(str, Enum):
     """
     Supported card types for analysis.
-    Currently limited to Pokemon cards only.
+    
+    Supports all three main Pokemon TCG card types:
+    - Pokemon cards (with owner/variant prefixes and mechanic suffixes)
+    - Trainer cards (Item, Supporter, Stadium, Pokemon Tool, etc.)
+    - Energy cards (Basic and Special Energy)
     """
     POKEMON = "pokemon"
+    TRAINER = "trainer"
+    ENERGY = "energy"
+    UNKNOWN = "unknown"
 
 
 class ImageEncoding(str, Enum):
