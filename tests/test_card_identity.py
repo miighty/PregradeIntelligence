@@ -684,3 +684,254 @@ class TestDomainEnums:
         assert TrainerSubtype.SUPPORTER.value == 'supporter'
         assert TrainerSubtype.STADIUM.value == 'stadium'
         assert TrainerSubtype.POKEMON_TOOL.value == 'pokemon_tool'
+
+
+class TestTrainerNameValidation:
+    """Verify Trainer card name validation."""
+    
+    def test_recognizes_common_items(self):
+        from services.card_identity import _is_likely_trainer_name
+        assert _is_likely_trainer_name("Pokemon Catcher")
+        assert _is_likely_trainer_name("Ultra Ball")
+        assert _is_likely_trainer_name("Rare Candy")
+        assert _is_likely_trainer_name("Nest Ball")
+    
+    def test_recognizes_common_supporters(self):
+        from services.card_identity import _is_likely_trainer_name
+        assert _is_likely_trainer_name("Professor's Research")
+        assert _is_likely_trainer_name("Boss's Orders")
+        assert _is_likely_trainer_name("Marnie")
+        assert _is_likely_trainer_name("Cynthia")
+    
+    def test_recognizes_common_stadiums(self):
+        from services.card_identity import _is_likely_trainer_name
+        assert _is_likely_trainer_name("Path to the Peak")
+        assert _is_likely_trainer_name("Training Court")
+        assert _is_likely_trainer_name("Lost City")
+    
+    def test_recognizes_pattern_professor(self):
+        from services.card_identity import _is_likely_trainer_name
+        # Professor pattern should match even if not in exact database
+        assert _is_likely_trainer_name("Professor Oak")
+        assert _is_likely_trainer_name("Professor's Research")
+    
+    def test_recognizes_pattern_ball(self):
+        from services.card_identity import _is_likely_trainer_name
+        # Ball pattern should match
+        assert _is_likely_trainer_name("Ultra Ball")
+        assert _is_likely_trainer_name("Quick Ball")
+    
+    def test_rejects_pokemon_names(self):
+        from services.card_identity import _is_likely_trainer_name
+        # Pokemon names should not be recognized as trainer names
+        assert not _is_likely_trainer_name("Pikachu")
+        assert not _is_likely_trainer_name("Charizard")
+    
+    def test_rejects_garbage(self):
+        from services.card_identity import _is_likely_trainer_name
+        assert not _is_likely_trainer_name("")
+        assert not _is_likely_trainer_name("ab")
+        assert not _is_likely_trainer_name("zzzzz")
+
+
+class TestTrainerNameScoring:
+    """Verify Trainer name candidate scoring."""
+    
+    def test_known_name_scores_high(self):
+        from services.card_identity import _score_trainer_name_candidate
+        score = _score_trainer_name_candidate("Pokemon Catcher")
+        assert score > 5.0  # Known name bonus
+    
+    def test_garbage_scores_low(self):
+        from services.card_identity import _score_trainer_name_candidate
+        score = _score_trainer_name_candidate("xxxyyy")
+        assert score < 0.0  # Garbage penalty
+    
+    def test_pokemon_name_penalized(self):
+        from services.card_identity import _score_trainer_name_candidate
+        score = _score_trainer_name_candidate("Pikachu")
+        # Should be low because it's a Pokemon name, not a trainer
+        assert score < 3.0
+
+
+class TestGarbageOcrDetection:
+    """Verify garbage OCR detection."""
+    
+    def test_detects_special_chars(self):
+        from services.card_identity import _looks_like_garbage_ocr
+        assert _looks_like_garbage_ocr("!!##$$%%")
+        assert _looks_like_garbage_ocr("@#$%^&*()")
+    
+    def test_detects_single_char_words(self):
+        from services.card_identity import _looks_like_garbage_ocr
+        assert _looks_like_garbage_ocr("U A F B O N")
+    
+    def test_detects_consonant_runs(self):
+        from services.card_identity import _looks_like_garbage_ocr
+        assert _looks_like_garbage_ocr("bcdfghjklmnp")
+    
+    def test_accepts_valid_names(self):
+        from services.card_identity import _looks_like_garbage_ocr
+        assert not _looks_like_garbage_ocr("Pokemon Catcher")
+        assert not _looks_like_garbage_ocr("Ultra Ball")
+        assert not _looks_like_garbage_ocr("Professor's Research")
+
+
+class TestEnergyNameValidation:
+    """Verify Energy card name validation."""
+    
+    def test_recognizes_basic_energy_types(self):
+        from services.card_identity import _is_likely_energy_name
+        assert _is_likely_energy_name("Fire Energy")
+        assert _is_likely_energy_name("Water Energy")
+        assert _is_likely_energy_name("Grass Energy")
+        assert _is_likely_energy_name("Lightning Energy")
+        assert _is_likely_energy_name("Psychic Energy")
+    
+    def test_recognizes_special_energy(self):
+        from services.card_identity import _is_likely_energy_name
+        assert _is_likely_energy_name("Double Colorless Energy")
+        assert _is_likely_energy_name("Twin Energy")
+        assert _is_likely_energy_name("Rainbow Energy")
+    
+    def test_recognizes_energy_keyword(self):
+        from services.card_identity import _is_likely_energy_name
+        assert _is_likely_energy_name("Capture Energy")
+        assert _is_likely_energy_name("Speed Lightning Energy")
+    
+    def test_recognizes_type_only(self):
+        from services.card_identity import _is_likely_energy_name
+        # Sometimes OCR only picks up the type
+        assert _is_likely_energy_name("Fire")
+        assert _is_likely_energy_name("Water")
+    
+    def test_rejects_non_energy(self):
+        from services.card_identity import _is_likely_energy_name
+        assert not _is_likely_energy_name("Pikachu")
+        assert not _is_likely_energy_name("")
+        assert not _is_likely_energy_name("ab")
+
+
+class TestEnergyNameScoring:
+    """Verify Energy name candidate scoring."""
+    
+    def test_known_energy_scores_high(self):
+        from services.card_identity import _score_energy_name_candidate
+        score = _score_energy_name_candidate("Fire Energy")
+        assert score >= 7.0  # Known name + energy keyword + type
+    
+    def test_special_energy_scores_high(self):
+        from services.card_identity import _score_energy_name_candidate
+        score = _score_energy_name_candidate("Double Colorless Energy")
+        assert score >= 7.0
+    
+    def test_garbage_scores_low(self):
+        from services.card_identity import _score_energy_name_candidate
+        score = _score_energy_name_candidate("xxxyyy")
+        assert score < 0.0
+
+
+class TestEnergyColorDetection:
+    """Verify Energy type detection from color analysis."""
+    
+    def test_function_exists(self):
+        from services.card_identity import _detect_energy_type_from_color
+        assert callable(_detect_energy_type_from_color)
+    
+    def test_returns_string_or_none(self):
+        from services.card_identity import _detect_energy_type_from_color
+        # Create a simple test image
+        img = Image.new('RGB', (100, 100), color='red')
+        result = _detect_energy_type_from_color(img)
+        # Should return a string energy type or None
+        assert result is None or isinstance(result, str)
+
+
+class TestNumberRegionsByCardType:
+    """Verify card type-aware number region selection."""
+    
+    def test_trainer_prefers_bottom_left(self):
+        from services.card_identity import _number_regions_for_card_type
+        regions = _number_regions_for_card_type("trainer", "modern")
+        labels = [label for label, _ in regions]
+        # First region should be bottom-left for trainer
+        assert labels[0].startswith("bottom_left")
+    
+    def test_energy_prefers_bottom_left(self):
+        from services.card_identity import _number_regions_for_card_type
+        regions = _number_regions_for_card_type("energy", "modern")
+        labels = [label for label, _ in regions]
+        # First region should be bottom-left for energy
+        assert labels[0].startswith("bottom_left")
+    
+    def test_pokemon_uses_family_heuristics(self):
+        from services.card_identity import _number_regions_for_card_type, _number_regions_for_family
+        # Pokemon cards should fall back to family-based selection
+        regions_type = _number_regions_for_card_type("pokemon", "modern")
+        regions_family = _number_regions_for_family("modern")
+        assert regions_type == regions_family
+    
+    def test_unknown_uses_family_heuristics(self):
+        from services.card_identity import _number_regions_for_card_type, _number_regions_for_family
+        # Unknown type should fall back to family-based selection
+        regions_type = _number_regions_for_card_type("unknown", "vintage")
+        regions_family = _number_regions_for_family("vintage")
+        assert regions_type == regions_family
+    
+    def test_all_card_types_return_regions(self):
+        from services.card_identity import _number_regions_for_card_type
+        for card_type in ["pokemon", "trainer", "energy", "unknown"]:
+            for family in ["modern", "vintage", "special"]:
+                regions = _number_regions_for_card_type(card_type, family)
+                assert len(regions) >= 2  # At least 2 regions
+                for label, region in regions:
+                    assert isinstance(label, str)
+                    assert hasattr(region, 'top_ratio')
+
+
+class TestDatabaseCompleteness:
+    """Verify database completeness for Trainer/Energy cards."""
+    
+    def test_trainer_database_size(self):
+        from services.pokemon_names import get_trainer_card_names
+        names = get_trainer_card_names()
+        assert len(names) >= 400  # Should have at least 400 trainer names
+    
+    def test_energy_database_size(self):
+        from services.pokemon_names import get_energy_card_names
+        names = get_energy_card_names()
+        assert len(names) >= 80  # Should have at least 80 energy names
+    
+    def test_trainer_includes_vintage(self):
+        from services.card_identity import _is_likely_trainer_name
+        # Vintage trainer cards should be recognized
+        assert _is_likely_trainer_name("Computer Search")
+        assert _is_likely_trainer_name("Item Finder")
+        assert _is_likely_trainer_name("Gust of Wind")
+    
+    def test_trainer_includes_modern(self):
+        from services.card_identity import _is_likely_trainer_name
+        # Modern trainer cards should be recognized
+        assert _is_likely_trainer_name("Boss's Orders")
+        assert _is_likely_trainer_name("Earthen Vessel")
+        assert _is_likely_trainer_name("Arven")
+    
+    def test_trainer_includes_ace_specs(self):
+        from services.card_identity import _is_likely_trainer_name
+        # Ace Spec cards should be recognized
+        assert _is_likely_trainer_name("Prime Catcher")
+        assert _is_likely_trainer_name("Hero's Cape")
+    
+    def test_energy_includes_basic(self):
+        from services.card_identity import _is_likely_energy_name
+        # Basic energy types should be recognized
+        assert _is_likely_energy_name("Fire Energy")
+        assert _is_likely_energy_name("Water Energy")
+        assert _is_likely_energy_name("Basic Grass Energy")
+    
+    def test_energy_includes_special(self):
+        from services.card_identity import _is_likely_energy_name
+        # Special energy should be recognized
+        assert _is_likely_energy_name("Double Turbo Energy")
+        assert _is_likely_energy_name("Jet Energy")
+        assert _is_likely_energy_name("V Guard Energy")

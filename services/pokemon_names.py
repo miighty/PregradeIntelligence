@@ -295,11 +295,61 @@ MECHANIC_SUFFIXES: set[str] = {
     "prism star", "prismstar",
 }
 
-# Energy types for Energy card detection
+# Energy types for Energy card detection (basic types)
 ENERGY_TYPES: set[str] = {
     "grass", "fire", "water", "lightning", "psychic",
     "fighting", "darkness", "dark", "metal", "steel",
     "fairy", "dragon", "colorless", "normal",
+}
+
+# Complete Energy card names (basic + special)
+ENERGY_CARD_NAMES: set[str] = {
+    # Basic Energy (each type + "Energy" suffix)
+    "grass energy", "fire energy", "water energy", "lightning energy",
+    "psychic energy", "fighting energy", "darkness energy", "dark energy",
+    "metal energy", "steel energy", "fairy energy", "dragon energy",
+    "colorless energy", "normal energy",
+    # Basic Energy (type only - often OCR'd without "Energy")
+    "grass", "fire", "water", "lightning", "psychic",
+    "fighting", "darkness", "metal", "fairy", "dragon", "colorless",
+    # Special Energy cards (commonly played)
+    "double colorless energy", "dce", "double turbo energy",
+    "twin energy", "triple acceleration energy", "counter energy",
+    "rainbow energy", "multi energy", "blend energy",
+    "aurora energy", "capture energy", "coating energy",
+    "heat energy", "horror psychic energy", "hiding darkness energy",
+    "powerful colorless energy", "speed lightning energy",
+    "stone fighting energy", "spiral energy", "unit energy",
+    "weakness guard energy", "recycle energy", "warp energy",
+    "boost energy", "scramble energy", "react energy",
+    "holon energy", "heal energy", "recover energy",
+    "double dragon energy", "dangerous energy", "mystery energy",
+    "herbal energy", "burning energy", "splash energy",
+    "shield energy", "gift energy", "jet energy", "luminous energy",
+    "reversal energy", "therapeutic energy", "neo upper energy",
+    "legacy energy", "basic energy", "special energy",
+    # V-Star / Ace Spec Energy
+    "v star energy", "double rainbow energy",
+    # Fusion Strike Energy
+    "fusion strike energy",
+    # Call Energy
+    "call energy",
+    # Newer special energy
+    "v guard energy", "gift energy", "luminous energy",
+    "jet energy", "reversal energy", "therapeutic energy",
+    "neo upper energy", "legacy energy",
+    # Sword & Shield era energy
+    "capture energy", "coating energy", "heat energy",
+    "horror psychic energy", "hiding darkness energy",
+    "powerful colorless energy", "speed lightning energy",
+    "stone fighting energy", "aromatic energy",
+    "lucky energy", "draw energy", "impact energy",
+    "regenerative energy", "modifying energy", "mirage energy",
+    # Modern competitive energy
+    "double turbo energy", "dte", "dce",
+    "basic grass energy", "basic fire energy", "basic water energy",
+    "basic lightning energy", "basic psychic energy", "basic fighting energy",
+    "basic darkness energy", "basic metal energy", "basic fairy energy",
 }
 
 # Trainer card subtypes for Trainer card detection
@@ -307,6 +357,154 @@ TRAINER_SUBTYPES: set[str] = {
     "item", "supporter", "stadium", "pokemon tool", "pokémon tool",
     "technical machine", "tm", "ace spec", "acespec",
     "rocket's secret machine", "goldenrod game corner",
+}
+
+# Common Trainer card names for validation
+# This is a representative list of popular/common trainer cards across sets
+TRAINER_CARD_NAMES: set[str] = {
+    # Popular Items
+    "pokemon catcher", "pokémon catcher", "ultra ball", "nest ball", "quick ball",
+    "level ball", "heavy ball", "dive ball", "net ball", "friend ball",
+    "great ball", "poke ball", "pokeball", "pokéball", "master ball",
+    "timer ball", "repeat ball", "dusk ball", "luxury ball", "beast ball",
+    "cherish ball", "dream ball", "safari ball", "sport ball", "moon ball",
+    "love ball", "fast ball", "lure ball", "heal ball", "premier ball",
+    "rare candy", "switch", "escape rope", "potion", "super potion",
+    "hyper potion", "max potion", "full heal", "full restore",
+    "revive", "max revive", "super rod", "good rod", "old rod",
+    "evolution incense", "lucky egg", "exp share", "rescue stretcher",
+    "vs seeker", "vs recorder", "battle compressor", "trainers' mail",
+    "acro bike", "mach bike", "bicycle", "roller skates",
+    "crushing hammer", "enhanced hammer", "pal pad", "town map",
+    "energy retrieval", "energy search", "energy recycler", "energy switch",
+    "energy spinner", "energy removal", "super energy removal",
+    "computer search", "gust of wind", "item finder", "night maintenance",
+    "ancient technical machine", "technical machine evolution",
+    "power tablet", "turbo patch", "bug catcher", "pokegear",
+    "pokégear 3.0", "rotom phone", "ordinary rod", "hisuian heavy ball",
+    "mysterious fossil", "unidentified fossil", "rare fossil",
+    "devolution spray", "max elixir", "fighting fury belt",
+    "muscle band", "choice band", "expert belt", "float stone",
+    "air balloon", "cape of toughness", "big charm", "lucky helmet",
+    "rocky helmet", "tool scrapper", "field blower", "startling megaphone",
+    "lost vacuum", "super scoop up", "scoop up net", "scoop up cyclone",
+    "counter catcher", "boss's orders", "cross switcher", "trekking shoes",
+    "battle vip pass", "leafy camo poncho", "earthen vessel",
+    "superior energy retrieval", "night stretcher", "buddy buddy poffin",
+    "pokémon league headquarters", "ultra space", "mysterious treasure",
+    "communication", "pokemon communication", "pokémon communication",
+    "tag call", "evolution charm", "rare charm",
+    # Popular Supporters
+    "professor's research", "professors research", "professor research",
+    "professor oak", "professor oak's new theory", "professor elm",
+    "professor juniper", "professor sycamore", "professor kukui",
+    "professor magnolia", "professor burnet", "professor turo",
+    "professor sada", "professor rowan", "professor birch",
+    "n", "judge", "marnie", "boss", "boss's orders",
+    "cynthia", "steven", "sabrina", "koga", "giovanni",
+    "lysandre", "guzma", "looker", "team flare grunt",
+    "team rocket grunt", "team magma grunt", "team aqua grunt",
+    "team galactic grunt", "team plasma grunt", "team skull grunt",
+    "team yell grunt", "team star grunt",
+    "pokemon breeder", "pokémon breeder", "pokemon fan club",
+    "pokemon trader", "pokémon trader", "pokemon center lady",
+    "pokemon ranger", "pokémon ranger", "pokemon collector",
+    "hiker", "fisherman", "blacksmith", "hex maniac",
+    "psychic", "brock", "misty", "lt surge", "erika",
+    "blaine", "janine", "falkner", "bugsy", "whitney",
+    "morty", "jasmine", "pryce", "clair", "will",
+    "karen", "bruno", "lance", "lorelei", "agatha",
+    "brock's grit", "misty's determination", "misty's favor",
+    "bill", "mr fuji", "mr briney", "mr stone",
+    "rosa", "hau", "hop", "nemona", "arven", "penny",
+    "iono", "geeta", "raihan", "gordie", "melony",
+    "bea", "allister", "opal", "kabu", "nessa",
+    "milo", "leon", "piers", "peonia", "peony",
+    "klara", "avery", "mustard", "honey",
+    "colress", "team plasma n", "zinnia", "acerola",
+    "gladion", "lillie", "lusamine", "faba", "wicke",
+    "korrina", "diantha", "malva", "wikstrom", "drasna", "siebold",
+    "shauna", "tierno", "trevor", "serena", "calem",
+    "skyla", "cheren", "bianca", "alder", "iris",
+    "clay", "elesa", "burgh", "lenora", "cilan",
+    "volkner", "flint", "bertha", "aaron", "lucian",
+    "cheryl", "mira", "riley", "buck", "marley",
+    "crasher wake", "maylene", "candice", "fantina", "gardenia",
+    "byron", "roark", "cyrus", "team galactic boss",
+    "archie", "maxie", "norman", "roxanne", "brawly",
+    "wattson", "flannery", "winona", "tate", "liza",
+    "juan", "wallace", "sidney", "phoebe", "glacia",
+    "drake", "wally",
+    "welder", "green's exploration", "caitlin", "oleana",
+    "mallow", "lana", "kiawe", "sophocles", "mina",
+    "hapu", "olivia", "nanu", "acerola", "molayne",
+    "kahili", "hala", "plumeria", "guzma",
+    # Popular Stadiums
+    "path to the peak", "lost city", "magma basin",
+    "training court", "tower of darkness", "tower of waters",
+    "rose tower", "turffield stadium", "circhester bath",
+    "wyndon stadium", "glimwood tangle", "stow on side",
+    "spikemuth", "hulbury", "motostoke", "hammerlocke",
+    "giant hearth", "heat factory", "martial arts dojo",
+    "wondrous labyrinth", "black market", "shrine of punishment",
+    "life forest", "thunder mountain", "viridian forest",
+    "pokemon center", "pokémon center", "dimension valley",
+    "sky field", "silent lab", "rough seas", "scorched earth",
+    "fighting stadium", "steel shelter", "fairy garden",
+    "frozen city", "virbank city gym", "tropical beach",
+    "computer room", "narrow gym", "celadon city gym",
+    "saffron city gym", "vermilion city gym", "pewter city gym",
+    "cerulean city gym", "fuchsia city gym", "cinnabar island gym",
+    "ecruteak city gym", "goldenrod city gym", "azalea town gym",
+    "violet city gym", "olivine city gym", "cianwood city gym",
+    "mahogany town gym", "blackthorn city gym", "indigo plateau",
+    "pokemon league", "pokémon league",
+    "chateau de rosa", "poke stop", "pokéstop",
+    "jubilife village", "galaxy headquarters", "obsidian fieldlands",
+    "coronet highlands", "cobalt coastlands", "crimson mirelands",
+    "alabaster icelands", "temple of sinnoh",
+    "artazon", "cascarrafa", "levincia", "medali", "montenevera",
+    "area zero", "poco path", "mesagoza", "paldean student",
+    # Recent competitive staples (2023-2026)
+    "earthen vessel", "super rod", "rescue board", "pal pad",
+    "arven", "penny", "giacomo", "mela", "atticus", "ortega", "eri",
+    "boss's command", "workers", "iono's intuition", "clavell",
+    "scarlet and violet", "temporal forces", "surging sparks",
+    "crown zenith", "brilliant stars", "astral radiance",
+    "lost origin", "silver tempest", "paradox rift",
+    # Popular vintage items (Base Set - Neo era)
+    "bill", "item finder", "energy removal", "super energy removal",
+    "gust of wind", "professor oak", "lass", "computer search",
+    "imposter professor oak", "gambler", "nightly garbage run",
+    "sprout tower", "rocket's hideout", "chaos gym",
+    "the rocket's trap", "here comes team rocket",
+    "pokemon breeder", "pokemon trader", "pokemon center",
+    "pokémon breeder", "pokémon trader", "pokémon center",
+    "gold berry", "miracle berry", "focus band",
+    "berry", "pluspower", "defender", "pokemon march",
+    # More gym leaders
+    "falkner", "morty", "chuck", "pryce", "clair",
+    "bugsy", "jasmine", "whitney", "chuck",
+    # Modern staples
+    "nest ball", "level ball", "ultra ball", "quick ball",
+    "hisuian heavy ball", "heavy ball", "dive ball",
+    "great ball", "friend ball", "moon ball", "lure ball",
+    "love ball", "fast ball", "safari ball", "sport ball",
+    "jet energy", "double turbo energy", "v guard energy",
+    "forest seal stone", "beach court", "collapsed stadium",
+    "crystal cave", "dark patch", "energy recycler",
+    "evolution incense", "fog crystal", "irida",
+    "grant", "melony", "raihan", "phoebe", "cheren's care",
+    "team yell towel", "team yell's cheer", "tool jammer",
+    "choice belt", "air balloon", "cape of toughness",
+    "vitality band", "rocky helmet", "big charm",
+    "lucky helmet", "exp. share", "exp share",
+    # Ace Spec cards
+    "computer search", "dowsing machine", "scramble switch",
+    "life dew", "victory piece", "g booster", "g scope",
+    "master ball", "scoop up cyclone", "rock guard",
+    "prime catcher", "hero's cape", "maximum belt",
+    "reboot pod", "survival brace", "unfair stamp",
 }
 
 
@@ -335,6 +533,16 @@ def get_energy_types() -> set[str]:
     return ENERGY_TYPES.copy()
 
 
+def get_energy_card_names() -> set[str]:
+    """Return the set of known energy card names."""
+    return ENERGY_CARD_NAMES.copy()
+
+
 def get_trainer_subtypes() -> set[str]:
     """Return the set of trainer subtypes."""
     return TRAINER_SUBTYPES.copy()
+
+
+def get_trainer_card_names() -> set[str]:
+    """Return the set of known trainer card names."""
+    return TRAINER_CARD_NAMES.copy()

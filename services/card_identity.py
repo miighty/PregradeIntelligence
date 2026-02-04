@@ -27,7 +27,9 @@ from services.pokemon_names import (
     get_variant_prefixes,
     get_mechanic_suffixes,
     get_energy_types,
+    get_energy_card_names,
     get_trainer_subtypes,
+    get_trainer_card_names,
 )
 
 
@@ -41,12 +43,26 @@ class OCRRegion:
 
 
 # The name line varies by template/scan. We use per-template candidate bands.
+# Pokemon card name regions (name at top-left, next to HP)
 NAME_REGION_MODERN_A = OCRRegion(top_ratio=0.040, bottom_ratio=0.115, left_ratio=0.10, right_ratio=0.72)
 NAME_REGION_MODERN_B = OCRRegion(top_ratio=0.055, bottom_ratio=0.140, left_ratio=0.08, right_ratio=0.78)
 NAME_REGION_VINTAGE_A = OCRRegion(top_ratio=0.060, bottom_ratio=0.135, left_ratio=0.12, right_ratio=0.70)
 NAME_REGION_VINTAGE_B = OCRRegion(top_ratio=0.075, bottom_ratio=0.150, left_ratio=0.10, right_ratio=0.74)
 NAME_REGION_SPECIAL_A = OCRRegion(top_ratio=0.050, bottom_ratio=0.150, left_ratio=0.08, right_ratio=0.78)
 NAME_REGION_SPECIAL_B = OCRRegion(top_ratio=0.060, bottom_ratio=0.170, left_ratio=0.06, right_ratio=0.82)
+
+# Trainer card name regions (below "TRAINER" header, often with colored subtype badge)
+# Trainer cards have: TRAINER header -> Card name -> Subtype badge (Item/Supporter/Stadium)
+NAME_REGION_TRAINER_A = OCRRegion(top_ratio=0.08, bottom_ratio=0.16, left_ratio=0.08, right_ratio=0.92)
+NAME_REGION_TRAINER_B = OCRRegion(top_ratio=0.10, bottom_ratio=0.18, left_ratio=0.06, right_ratio=0.94)
+NAME_REGION_TRAINER_C = OCRRegion(top_ratio=0.06, bottom_ratio=0.14, left_ratio=0.10, right_ratio=0.90)
+
+# Energy card name regions (energy type name near top, below "ENERGY" header)
+NAME_REGION_ENERGY_A = OCRRegion(top_ratio=0.05, bottom_ratio=0.15, left_ratio=0.15, right_ratio=0.85)
+NAME_REGION_ENERGY_B = OCRRegion(top_ratio=0.08, bottom_ratio=0.18, left_ratio=0.12, right_ratio=0.88)
+
+# Header region for early card type detection (top banner with TRAINER/ENERGY/Pokemon name)
+HEADER_REGION_TYPE_DETECT = OCRRegion(top_ratio=0.0, bottom_ratio=0.10, left_ratio=0.0, right_ratio=1.0)
 
 # Card number placement: bottom-left or bottom-right on the warped card.
 # We use two-pass crops (tight + expanded) per corner.
@@ -76,6 +92,14 @@ _POKEMON_NAMES: set[str] = get_all_pokemon_names()
 _OWNER_PREFIXES: set[str] = get_owner_prefixes()
 _VARIANT_PREFIXES: set[str] = get_variant_prefixes()
 _MECHANIC_SUFFIXES: set[str] = get_mechanic_suffixes()
+
+# Load Trainer card names database for validation
+_TRAINER_CARD_NAMES: set[str] = get_trainer_card_names()
+_TRAINER_SUBTYPES: set[str] = get_trainer_subtypes()
+
+# Load Energy card names database for validation
+_ENERGY_CARD_NAMES: set[str] = get_energy_card_names()
+_ENERGY_TYPES: set[str] = get_energy_types()
 _ENERGY_TYPES: set[str] = get_energy_types()
 _TRAINER_SUBTYPES: set[str] = get_trainer_subtypes()
 
@@ -313,6 +337,136 @@ def _detect_trainer_subtype(text: str) -> Optional[str]:
     return None
 
 
+def _detect_card_type_early(image: Image.Image) -> str:
+    """
+    Detect card type from header region BEFORE name extraction.
+    
+    This allows us to select the appropriate OCR regions for each card type:
+    - Trainer cards have name below "TRAINER" header
+    - Energy cards have energy type name/symbol
+    - Pokemon cards have name at top-left with HP
+    
+    Returns: "pokemon", "trainer", "energy", or "unknown"
+    """
+    try:
+        # Extract the header region (top 10% of card)
+        crop = _crop_region(image, HEADER_REGION_TYPE_DETECT)
+        
+        # Try multiple preprocessing strategies for header OCR
+        strategies = [
+            ("--psm 6 --oem 1", crop),  # Block mode
+            ("--psm 7 --oem 1", crop),  # Single line mode
+        ]
+        
+        # Also try grayscale + contrast enhancement
+        gray = crop.convert('L')
+        enhanced = ImageEnhance.Contrast(gray).enhance(2.0)
+        strategies.append(("--psm 6 --oem 1", enhanced))
+        
+        for config, img in strategies:
+            try:
+                text = pytesseract.image_to_string(img, lang=TESSERACT_LANG, config=config)
+                text_lower = (text or "").lower()
+                
+                # Check for clear "TRAINER" indicator
+                if "trainer" in text_lower:
+                    return "trainer"
+                
+                # Check for "ENERGY" indicator
+                if "energy" in text_lower:
+                    return "energy"
+                
+                # Check for HP indicator (Pokemon cards have "HP" or "HP XXX")
+                if re.search(r'\bhp\b|\d+\s*hp', text_lower):
+                    return "pokemon"
+                
+            except Exception:
+                continue
+        
+        # If no clear indicator found, check for Pokemon name in header
+        # Pokemon cards typically have the Pokemon name prominently in the header
+        for config, img in strategies[:1]:
+            try:
+                text = pytesseract.image_to_string(img, lang=TESSERACT_LANG, config=config)
+                if text:
+                    for pname in _POKEMON_NAMES:
+                        if len(pname) >= 4 and pname in _normalize_for_match(text):
+                            return "pokemon"
+            except Exception:
+                continue
+        
+        return "unknown"
+        
+    except Exception:
+        return "unknown"
+
+
+def _detect_energy_type_from_color(image: Image.Image) -> Optional[str]:
+    """
+    Detect energy type from dominant color in the card center.
+    
+    Basic Energy cards have a large colored energy symbol in the center.
+    
+    Returns: energy type string or None
+    """
+    try:
+        # Sample the center region where energy symbol would be
+        arr = np.array(image.convert("RGB"), dtype=np.uint8)
+        h, w, _ = arr.shape
+        
+        # Center region (40-60% from top, 30-70% from sides)
+        center = arr[int(h*0.4):int(h*0.6), int(w*0.3):int(w*0.7), :]
+        
+        # Calculate average color
+        avg_color = center.mean(axis=(0, 1))
+        r, g, b = avg_color
+        
+        # Map dominant colors to energy types
+        # These thresholds are approximations based on energy card designs
+        if g > r and g > b and g > 100:
+            return "grass"
+        if r > g and r > b and r > 150:
+            if b > 100:
+                return "psychic"  # Purple-ish
+            return "fire"
+        if b > r and b > g and b > 120:
+            return "water"
+        if r > 180 and g > 180 and b < 100:
+            return "lightning"
+        if r > 150 and g > 100 and b < 100:
+            return "fighting"
+        if r < 100 and g < 100 and b < 100:
+            return "darkness"
+        if r > 150 and g > 150 and b > 150:
+            return "colorless"
+        if r > 100 and g > 100 and b > 100 and abs(r - g) < 30 and abs(g - b) < 30:
+            return "metal"
+        
+        return None
+        
+    except Exception:
+        return None
+
+
+def _name_regions_for_card_type(card_type: str, template_family: str) -> list[OCRRegion]:
+    """
+    Select appropriate name OCR regions based on detected card type.
+    
+    Different card types have names in different locations:
+    - Pokemon: Top-left, before HP indicator
+    - Trainer: Below "TRAINER" header, often centered
+    - Energy: Energy type name, often centered below header
+    """
+    if card_type == "trainer":
+        return [NAME_REGION_TRAINER_A, NAME_REGION_TRAINER_B, NAME_REGION_TRAINER_C]
+    
+    if card_type == "energy":
+        return [NAME_REGION_ENERGY_A, NAME_REGION_ENERGY_B]
+    
+    # Default to Pokemon card regions based on template family
+    return _name_regions_for_family(template_family)
+
+
 def _is_likely_pokemon_name(name: str) -> bool:
     """
     Check if a name is likely a valid Pokemon card name.
@@ -378,6 +532,342 @@ def _correct_ocr_confusions(text: str) -> str:
     return result
 
 
+def _looks_like_garbage_ocr(text: str) -> bool:
+    """
+    Check if OCR result looks like garbage (random characters, not a real name).
+    
+    Indicators of garbage OCR:
+    - Too many uppercase letters in wrong places
+    - Too many special characters
+    - Repeating patterns that don't form words
+    - Character sequences that are unlikely in English
+    """
+    if not text or len(text) < 2:
+        return True
+    
+    # Count problematic characters
+    special_count = sum(1 for c in text if not c.isalnum() and c not in " '-")
+    if special_count > len(text) * 0.3:
+        return True
+    
+    # Check for too many single-character "words"
+    words = text.split()
+    if len(words) > 2:
+        single_char_words = sum(1 for w in words if len(w) == 1 and w.upper() not in "AI")
+        if single_char_words > len(words) * 0.5:
+            return True
+    
+    # Check for unlikely character sequences
+    unlikely_patterns = ['xx', 'qq', 'zz', 'ww', 'vv', 'kk', 'yy']
+    text_lower = text.lower()
+    for pattern in unlikely_patterns:
+        if pattern in text_lower:
+            return True
+    
+    # Check consonant-heavy sequences (no vowels in long runs)
+    vowels = set('aeiou')
+    consonant_run = 0
+    max_consonant_run = 0
+    for c in text_lower:
+        if c.isalpha():
+            if c in vowels:
+                consonant_run = 0
+            else:
+                consonant_run += 1
+                max_consonant_run = max(max_consonant_run, consonant_run)
+    
+    # More than 5 consonants in a row is suspicious
+    if max_consonant_run > 5:
+        return True
+    
+    return False
+
+
+def _extract_trainer_name(image: Image.Image) -> Optional[str]:
+    """
+    Extract Trainer card name using specialized OCR strategies.
+    
+    Trainer card names are typically:
+    - Centered below the "TRAINER" header
+    - In a bolder/larger font than Pokemon card names
+    - May include special characters (', -, etc.)
+    """
+    best_candidate = None
+    best_score = 0
+    
+    # Try each Trainer name region with multiple OCR configs
+    trainer_regions = [NAME_REGION_TRAINER_A, NAME_REGION_TRAINER_B, NAME_REGION_TRAINER_C]
+    
+    for region in trainer_regions:
+        crop = _crop_region(image, region)
+        
+        # Strategy 1: Standard grayscale + contrast
+        gray = crop.convert('L')
+        enhanced = ImageEnhance.Contrast(gray).enhance(2.0)
+        
+        configs = [
+            "--psm 7 --oem 1",  # Single line
+            "--psm 6 --oem 1",  # Block
+            "--psm 8 --oem 1",  # Single word
+        ]
+        
+        for config in configs:
+            try:
+                text = pytesseract.image_to_string(enhanced, lang=TESSERACT_LANG, config=config)
+                text = (text or "").strip()
+                
+                if text and len(text) >= 3:
+                    # Score this candidate
+                    score = _score_trainer_name_candidate(text)
+                    if score > best_score:
+                        best_score = score
+                        best_candidate = _clean_trainer_name(text)
+            except Exception:
+                continue
+        
+        # Strategy 2: High contrast binarization
+        try:
+            arr = np.array(gray, dtype=np.uint8)
+            threshold = np.percentile(arr, 40)
+            binary = Image.fromarray((arr > threshold).astype(np.uint8) * 255)
+            
+            for config in configs[:2]:
+                text = pytesseract.image_to_string(binary, lang=TESSERACT_LANG, config=config)
+                text = (text or "").strip()
+                
+                if text and len(text) >= 3:
+                    score = _score_trainer_name_candidate(text)
+                    if score > best_score:
+                        best_score = score
+                        best_candidate = _clean_trainer_name(text)
+        except Exception:
+            pass
+    
+    return best_candidate
+
+
+def _is_likely_trainer_name(name: str) -> bool:
+    """
+    Check if a name is likely a valid Trainer card name.
+    
+    Checks against database of known Trainer card names and common patterns.
+    """
+    if not name or len(name) < 3:
+        return False
+    
+    # Normalize preserving spaces for database lookup
+    name_lower = (name or "").strip().lower()
+    
+    # Direct match in database (with spaces)
+    if name_lower in _TRAINER_CARD_NAMES:
+        return True
+    
+    # Also try without apostrophe variants
+    name_no_apos = name_lower.replace("'", "")
+    if name_no_apos in _TRAINER_CARD_NAMES:
+        return True
+    
+    # Check if any multi-word segment matches
+    for db_name in _TRAINER_CARD_NAMES:
+        if len(db_name) >= 4 and db_name in name_lower:
+            return True
+    
+    # Check for common Trainer card patterns (on original string for readability)
+    trainer_patterns = [
+        r"professor\s*'?s?\s*\w+",  # Professor's X, Professor X
+        r"boss\s*'?s?\s*orders?",   # Boss's Orders
+        r"\w+\s*ball",              # X Ball
+        r"\w+\s*potion",            # X Potion
+        r"\w+\s*city\s*gym",        # X City Gym
+        r"team\s*\w+\s*grunt",      # Team X Grunt
+    ]
+    
+    for pattern in trainer_patterns:
+        if re.search(pattern, name_lower, re.IGNORECASE):
+            return True
+    
+    return False
+
+
+def _score_trainer_name_candidate(text: str) -> float:
+    """
+    Score a trainer name candidate based on likelihood of being correct.
+    
+    Higher scores indicate more likely real card names.
+    """
+    score = 0.0
+    
+    # Strong bonus for matching known Trainer card names
+    if _is_likely_trainer_name(text):
+        score += 5.0
+    
+    # Length-based scoring (Trainer names are typically 6-25 chars)
+    length = len(text)
+    if 6 <= length <= 25:
+        score += 2.0
+    elif 3 <= length < 6:
+        score += 1.0
+    elif length > 25:
+        score += 0.5
+    
+    # Penalize garbage-looking text
+    if _looks_like_garbage_ocr(text):
+        score -= 3.0
+    
+    # Bonus for proper capitalization (Title Case or ALL CAPS)
+    if text.istitle() or text.isupper():
+        score += 1.0
+    
+    # Bonus for containing common trainer card words
+    trainer_keywords = {'ball', 'potion', 'catcher', 'switch', 'trainer', 'professor', 
+                       'boss', 'research', 'nest', 'ultra', 'quick', 'rare', 'candy',
+                       'gym', 'stadium', 'supporter', 'energy', 'retrieval', 'search'}
+    text_lower = text.lower()
+    for keyword in trainer_keywords:
+        if keyword in text_lower:
+            score += 1.5
+    
+    # Penalize if it looks like a Pokemon name (probably wrong region)
+    if _is_likely_pokemon_name(text):
+        score -= 1.0
+    
+    return score
+
+
+def _clean_trainer_name(text: str) -> str:
+    """
+    Clean up a trainer card name from OCR.
+    
+    - Remove extra whitespace
+    - Fix common OCR issues
+    - Normalize capitalization
+    """
+    # Remove leading/trailing whitespace and normalize internal spaces
+    result = ' '.join(text.split())
+    
+    # Remove common OCR artifacts
+    result = re.sub(r'^[^a-zA-Z]+', '', result)  # Leading non-letters
+    result = re.sub(r'[^a-zA-Z\s\'-]+$', '', result)  # Trailing non-letters
+    
+    # Normalize to title case if it looks reasonable
+    if result and not result.isupper():
+        result = result.title()
+    
+    return result.strip()
+
+
+def _is_likely_energy_name(name: str) -> bool:
+    """
+    Check if a name is likely a valid Energy card name.
+    
+    Checks against database of known Energy card names and common patterns.
+    """
+    if not name or len(name) < 3:
+        return False
+    
+    name_lower = (name or "").strip().lower()
+    
+    # Direct match in database
+    if name_lower in _ENERGY_CARD_NAMES:
+        return True
+    
+    # Check if it's an energy type with optional "Energy" suffix
+    for energy_type in _ENERGY_TYPES:
+        if energy_type in name_lower:
+            return True
+    
+    # Check for "Energy" keyword
+    if "energy" in name_lower:
+        return True
+    
+    return False
+
+
+def _extract_energy_name(image: Image.Image, detected_type: Optional[str]) -> Optional[str]:
+    """
+    Extract Energy card name using OCR and/or color detection.
+    
+    Energy cards have simpler naming:
+    - Basic Energy: "[Type] Energy" (e.g., "Fire Energy")
+    - Special Energy: Name varies (e.g., "Double Colorless Energy")
+    """
+    # If we already detected the energy type via color analysis, use it
+    if detected_type:
+        return f"{detected_type.title()} Energy"
+    
+    # Otherwise try OCR on the energy name region
+    best_candidate = None
+    best_score = 0
+    
+    energy_regions = [NAME_REGION_ENERGY_A, NAME_REGION_ENERGY_B]
+    
+    for region in energy_regions:
+        crop = _crop_region(image, region)
+        
+        # Try grayscale + contrast
+        gray = crop.convert('L')
+        enhanced = ImageEnhance.Contrast(gray).enhance(2.0)
+        
+        configs = [
+            "--psm 7 --oem 1",
+            "--psm 6 --oem 1",
+        ]
+        
+        for config in configs:
+            try:
+                text = pytesseract.image_to_string(enhanced, lang=TESSERACT_LANG, config=config)
+                text = (text or "").strip()
+                
+                if text and len(text) >= 3:
+                    score = _score_energy_name_candidate(text)
+                    if score > best_score:
+                        best_score = score
+                        best_candidate = _clean_energy_name(text)
+            except Exception:
+                continue
+    
+    return best_candidate
+
+
+def _score_energy_name_candidate(text: str) -> float:
+    """Score an energy name candidate based on likelihood of being correct."""
+    score = 0.0
+    
+    # Strong bonus for matching known energy card names
+    if _is_likely_energy_name(text):
+        score += 5.0
+    
+    # Bonus for containing "energy"
+    if "energy" in text.lower():
+        score += 2.0
+    
+    # Bonus for matching energy type keywords
+    text_lower = text.lower()
+    for energy_type in _ENERGY_TYPES:
+        if energy_type in text_lower:
+            score += 2.0
+            break
+    
+    # Penalize garbage
+    if _looks_like_garbage_ocr(text):
+        score -= 3.0
+    
+    return score
+
+
+def _clean_energy_name(text: str) -> str:
+    """Clean up an energy card name from OCR."""
+    result = ' '.join(text.split())
+    result = re.sub(r'^[^a-zA-Z]+', '', result)
+    result = re.sub(r'[^a-zA-Z\s]+$', '', result)
+    
+    # Normalize to title case
+    if result:
+        result = result.title()
+    
+    return result.strip()
+
+
 def extract_card_identity(image: Image.Image) -> CardIdentity:
     """Extract card identity from a Pokémon card front image.
 
@@ -413,32 +903,59 @@ def extract_card_identity(image: Image.Image) -> CardIdentity:
 
     working_image = warped_image
     
+    # PHASE 1: Early card type detection BEFORE name extraction
+    # This allows us to use type-specific OCR regions
+    early_card_type = _detect_card_type_early(working_image)
+    early_energy_type = None
+    if early_card_type == "energy":
+        early_energy_type = _detect_energy_type_from_color(working_image)
+    
     template_family = _detect_template_family(working_image)
-    name_regions = _name_regions_for_family(template_family)
+    
+    # Select name regions based on detected card type
+    name_regions = _name_regions_for_card_type(early_card_type, template_family)
     name_candidates: list[str] = []
+    
     for region in name_regions:
         # Use improved multi-strategy name extraction
         raw = _extract_name_text(working_image, region)
         parsed = _parse_card_name(raw)
         name_candidates.append(parsed)
-        # Early exit if we find a validated Pokemon name
-        if _is_likely_pokemon_name(parsed):
+        
+        # For Pokemon cards, early exit if we find a validated Pokemon name
+        if early_card_type == "pokemon" and _is_likely_pokemon_name(parsed):
+            break
+        # For Trainer/Energy cards, accept any reasonable parsed name
+        if early_card_type in ("trainer", "energy") and len(parsed) >= 3:
             break
 
     card_name = _best_name_from_list(name_candidates)
     
-    # Fallback: if no valid Pokemon name found, try full-card OCR
-    # This helps with highly stylized fonts where the name region fails
-    if not _is_likely_pokemon_name(card_name):
-        full_card_name = _extract_name_from_full_card(working_image)
-        if _is_likely_pokemon_name(full_card_name):
-            card_name = full_card_name
+    # Fallback strategies depend on card type
+    if early_card_type == "pokemon":
+        # For Pokemon cards: try full-card OCR if no valid name found
+        if not _is_likely_pokemon_name(card_name):
+            full_card_name = _extract_name_from_full_card(working_image)
+            if _is_likely_pokemon_name(full_card_name):
+                card_name = full_card_name
+    elif early_card_type == "trainer":
+        # For Trainer cards: try additional OCR strategies if name looks bad
+        if len(card_name) < 3 or _looks_like_garbage_ocr(card_name):
+            trainer_name = _extract_trainer_name(working_image)
+            if trainer_name and len(trainer_name) >= 3:
+                card_name = trainer_name
+    elif early_card_type == "energy":
+        # For Energy cards: use specialized extraction if OCR failed
+        if len(card_name) < 3 or _looks_like_garbage_ocr(card_name) or not _is_likely_energy_name(card_name):
+            energy_name = _extract_energy_name(working_image, early_energy_type)
+            if energy_name and len(energy_name) >= 3:
+                card_name = energy_name
 
     # Card number: try deterministic template matcher across multiple candidate regions.
     # Choose the highest-confidence parse.
     # Rule: card number is always present in a bottom corner (bottom-right or bottom-left).
-    # Region selection is adapted based on template family for better hit rate.
-    candidate_regions = _number_regions_for_family(template_family)
+    # Region selection is adapted based on card type and template family for better hit rate.
+    candidate_regions = _number_regions_for_card_type(early_card_type, template_family)
 
     best_number = None
     best_conf = -1.0
@@ -577,26 +1094,36 @@ def extract_card_identity(image: Image.Image) -> CardIdentity:
 
     confidence = _calculate_confidence(card_name, card_number)
     
-    # Detect card type from full-card OCR (best effort)
-    # This helps categorize Trainer and Energy cards
-    detected_card_type = "pokemon"  # Default assumption
+    # Card type detection: prefer early detection, fallback to full-card OCR
+    # Early detection is faster and uses targeted header region
+    detected_card_type = early_card_type if early_card_type != "unknown" else "pokemon"
     trainer_subtype = None
     
-    try:
-        full_ocr_text = pytesseract.image_to_string(
-            working_image, lang=TESSERACT_LANG, config="--psm 6 --oem 1"
-        )
-        detected_card_type = _detect_card_type_from_text(full_ocr_text)
-        
-        # If detected as trainer, try to identify subtype
-        if detected_card_type == "trainer":
-            trainer_subtype = _detect_trainer_subtype(full_ocr_text)
-    except Exception:
-        # OCR failed, keep defaults
-        pass
+    # If early detection was uncertain, try full-card OCR as fallback
+    if early_card_type == "unknown":
+        try:
+            full_ocr_text = pytesseract.image_to_string(
+                working_image, lang=TESSERACT_LANG, config="--psm 6 --oem 1"
+            )
+            fallback_type = _detect_card_type_from_text(full_ocr_text)
+            if fallback_type != "pokemon":  # Only override if we found something specific
+                detected_card_type = fallback_type
+        except Exception:
+            pass
     
-    # If we found a valid Pokemon name, it's likely a Pokemon card
-    if _is_likely_pokemon_name(card_name):
+    # If detected as trainer, try to identify subtype
+    if detected_card_type == "trainer":
+        try:
+            full_ocr_text = pytesseract.image_to_string(
+                working_image, lang=TESSERACT_LANG, config="--psm 6 --oem 1"
+            )
+            trainer_subtype = _detect_trainer_subtype(full_ocr_text)
+        except Exception:
+            pass
+    
+    # Final validation: if we found a valid Pokemon name, it's likely a Pokemon card
+    # unless early detection strongly indicated otherwise
+    if _is_likely_pokemon_name(card_name) and early_card_type not in ("trainer", "energy"):
         detected_card_type = "pokemon"
     
     trace = {
@@ -606,6 +1133,8 @@ def extract_card_identity(image: Image.Image) -> CardIdentity:
         "template_family": template_family,
         "number_candidates": number_candidates,
         "number_region_selected": best_region or "none",
+        "early_card_type": early_card_type,
+        "early_energy_type": early_energy_type,
         "detected_card_type": detected_card_type,
     }
     
@@ -1308,6 +1837,45 @@ def _number_regions_for_family(family: str) -> list[tuple[str, OCRRegion]]:
     
     # Modern cards: standard order
     return all_regions
+
+
+def _number_regions_for_card_type(card_type: str, family: str) -> list[tuple[str, OCRRegion]]:
+    """Return appropriate number regions based on card type and template family.
+    
+    Card type influences where to look for the collector number:
+    - Pokemon cards: typically bottom-right for modern, varies for vintage
+    - Trainer cards: modern trainers often bottom-left, vintage bottom-right
+    - Energy cards: basic energy may not have a number, special energy has number
+    
+    Args:
+        card_type: Detected card type (pokemon, trainer, energy, unknown)
+        family: Template family (modern, vintage, special)
+        
+    Returns:
+        Ordered list of (label, region) tuples to try for number extraction
+    """
+    if card_type == "trainer":
+        # Trainer cards: prefer bottom-left (modern design)
+        # But also check bottom-right for older sets
+        return [
+            ("bottom_left:tight", CARD_NUMBER_BL_TIGHT),
+            ("bottom_left:wide", CARD_NUMBER_BL_WIDE),
+            ("bottom_right:tight", CARD_NUMBER_BR_TIGHT),
+            ("bottom_right:wide", CARD_NUMBER_BR_WIDE),
+        ]
+    
+    if card_type == "energy":
+        # Energy cards: basic energy usually has number at bottom-left
+        # Special energy varies, check both sides
+        return [
+            ("bottom_left:tight", CARD_NUMBER_BL_TIGHT),
+            ("bottom_left:wide", CARD_NUMBER_BL_WIDE),
+            ("bottom_right:tight", CARD_NUMBER_BR_TIGHT),
+            ("bottom_right:wide", CARD_NUMBER_BR_WIDE),
+        ]
+    
+    # Pokemon cards or unknown: use template family heuristics
+    return _number_regions_for_family(family)
 
 
 def _debug_number_crops_enabled() -> bool:
