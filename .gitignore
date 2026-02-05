@@ -61,6 +61,9 @@ data/
 eval/out_crops/
 eval/warp_debug_out/
 eval/reddit_batch/
+eval/reddit_types_6/
+eval/reddit_types_6b/
+
 exports/
 # Eval artifacts (CSV outputs)
 eval/*results*.csv
