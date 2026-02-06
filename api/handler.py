@@ -394,27 +394,56 @@ def _handle_analyze(event: dict[str, Any]) -> dict[str, Any]:
         return response(400, err.to_dict())
 
     # Deterministic request_id based on image + key fields.
-    request_id = content_hash_bytes(image_bytes)[:24] + "_" + content_hash_str("pokemon")[:8]
+    # Include card_type so the same bytes sent with different declared card_type
+    # cannot collide.
+    request_id = content_hash_bytes(image_bytes)[:24] + "_" + content_hash_str(str(card_type))[:8]
 
-    identity = extract_card_identity_from_bytes(image_bytes)
+    identity = extract_card_identity_from_bytes(image_bytes, requested_card_type=str(card_type))
 
-    # Minimal gatekeeper: reject only if the image could not be decoded (confidence 0 + empty name)
-    # This keeps rejection a billable, first-class outcome.
-    rejected = (identity.confidence == 0.0 and identity.card_name == "")
+    # Gatekeeper: billable, first-class rejections with reason codes.
+    reason_codes: list[str] = []
+    reasons: list[str] = []
+
+    # 1) Image unreadable / OCR could not run
+    if identity.confidence == 0.0 and identity.card_name == "":
+        reason_codes.append("IMAGE_UNREADABLE")
+        reasons.append("The submitted image could not be decoded or read reliably.")
+
+    # 2) Enforce declared type as a hard constraint
+    # (avoid returning pokemon identity for declared energy/trainer)
+    if card_type in {"pokemon", "trainer", "energy"}:
+        if identity.card_type not in {str(card_type), "unknown"}:
+            reason_codes.append("CARD_TYPE_MISMATCH")
+            reasons.append(f"Declared card_type={card_type} but detected {identity.card_type}.")
+
+    # 3) Type-specific minimum viability
+    if card_type == "energy":
+        # Energy names should include an energy type + 'Energy' (basic/special)
+        name_lower = (identity.card_name or "").lower()
+        if not name_lower or "energy" not in name_lower:
+            reason_codes.append("ENERGY_NAME_NOT_FOUND")
+            reasons.append("Could not confidently read an Energy card name containing 'Energy'.")
+    if card_type == "trainer":
+        # Trainer name must be non-trivial and not look like garbage
+        if not identity.card_name or len(identity.card_name.strip()) < 3:
+            reason_codes.append("TRAINER_NAME_NOT_FOUND")
+            reasons.append("Could not confidently read a Trainer card name.")
+
+    rejected = len(reason_codes) > 0
 
     gatekeeper = (
         GatekeeperResult(
             accepted=False,
-            reason_codes=("IMAGE_UNREADABLE",),
-            reasons=("The submitted image could not be decoded or read reliably.",),
-            explanation="Rejected: image unreadable.",
+            reason_codes=tuple(reason_codes),
+            reasons=tuple(reasons),
+            explanation="Rejected: gatekeeper checks failed.",
         )
         if rejected
         else GatekeeperResult(
             accepted=True,
             reason_codes=(),
             reasons=(),
-            explanation="Accepted: minimum input checks passed.",
+            explanation="Accepted: gatekeeper checks passed.",
         )
     )
 

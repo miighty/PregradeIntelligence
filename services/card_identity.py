@@ -868,8 +868,8 @@ def _clean_energy_name(text: str) -> str:
     return result.strip()
 
 
-def extract_card_identity(image: Image.Image) -> CardIdentity:
-    """Extract card identity from a Pokémon card front image.
+def extract_card_identity(image: Image.Image, requested_card_type: Optional[str] = None) -> CardIdentity:
+    """Extract card identity from a trading card front image.
 
     Returns CardIdentity with confidence score. Low confidence indicates
     extraction uncertainty; no exceptions are raised for OCR failures.
@@ -904,8 +904,16 @@ def extract_card_identity(image: Image.Image) -> CardIdentity:
     working_image = warped_image
     
     # PHASE 1: Early card type detection BEFORE name extraction
-    # This allows us to use type-specific OCR regions
-    early_card_type = _detect_card_type_early(working_image)
+    # This allows us to use type-specific OCR regions.
+    #
+    # If requested_card_type is provided, we treat it as a *hard hint* for selecting
+    # OCR regions and we avoid later "type flips" that can happen due to noisy OCR.
+    # The API layer can still reject if the content appears mismatched.
+    if requested_card_type in {"pokemon", "trainer", "energy"}:
+        early_card_type = requested_card_type
+    else:
+        early_card_type = _detect_card_type_early(working_image)
+
     early_energy_type = None
     if early_card_type == "energy":
         early_energy_type = _detect_energy_type_from_color(working_image)
@@ -1122,9 +1130,12 @@ def extract_card_identity(image: Image.Image) -> CardIdentity:
             pass
     
     # Final validation: if we found a valid Pokemon name, it's likely a Pokemon card
-    # unless early detection strongly indicated otherwise
-    if _is_likely_pokemon_name(card_name) and early_card_type not in ("trainer", "energy"):
-        detected_card_type = "pokemon"
+    # unless early detection strongly indicated otherwise.
+    #
+    # If requested_card_type is set, do NOT override it here (avoid brittle post-hoc flips).
+    if requested_card_type not in {"trainer", "energy"}:
+        if _is_likely_pokemon_name(card_name) and early_card_type not in ("trainer", "energy"):
+            detected_card_type = "pokemon"
     
     trace = {
         "warp_used": warp_used,
@@ -1155,7 +1166,7 @@ def extract_card_identity(image: Image.Image) -> CardIdentity:
     return enrich_identity(identity)
 
 
-def extract_card_identity_from_bytes(image_bytes: bytes) -> CardIdentity:
+def extract_card_identity_from_bytes(image_bytes: bytes, requested_card_type: Optional[str] = None) -> CardIdentity:
     """Extract card identity from raw image bytes (JPEG, PNG).
 
     NOTE: OCR + warping is relatively expensive. As a safety guard (and to keep
@@ -1163,6 +1174,9 @@ def extract_card_identity_from_bytes(image_bytes: bytes) -> CardIdentity:
 
     A real card-front photo will typically be hundreds of pixels wide/high.
     Tiny inputs are almost certainly placeholders or corrupted payloads.
+
+    If requested_card_type is provided ("pokemon"|"trainer"|"energy"), we use it
+    as a hint to select OCR regions and avoid brittle post-hoc type flips.
     """
     try:
         image = Image.open(io.BytesIO(image_bytes))
@@ -1172,7 +1186,7 @@ def extract_card_identity_from_bytes(image_bytes: bytes) -> CardIdentity:
         if max(w, h) < 200:
             return _empty_identity(image_bytes)
 
-        return extract_card_identity(image)
+        return extract_card_identity(image, requested_card_type=requested_card_type)
     except Exception:
         return _empty_identity(image_bytes)
 
