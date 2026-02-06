@@ -58,6 +58,9 @@ function extensionForContentType(contentType: string): string {
 }
 
 const app = Fastify({
+  // Allow inline base64 images for quickstart/testing.
+  // Preferred partner path is signed uploads (PUT raw bytes to S3).
+  bodyLimit: Number.parseInt(process.env.PREGRADE_BODY_LIMIT_BYTES ?? '20971520', 10) || 20 * 1024 * 1024,
   logger: {
     level: process.env.LOG_LEVEL ?? 'info'
   }
@@ -232,11 +235,12 @@ app.post(
     schema: {
       body: AnalyzeRequestSchema,
       response: {
-        501: AnalyzeResponseSchema,
+        200: AnalyzeResponseSchema,
         400: ErrorResponseSchema,
         401: ErrorResponseSchema,
         429: ErrorResponseSchema,
-        500: ErrorResponseSchema
+        500: ErrorResponseSchema,
+        501: ErrorResponseSchema
       }
     }
   },
@@ -253,18 +257,20 @@ app.post(
       return reply.code(400).send(err);
     }
 
-    const payload = body as Partial<AnalyzeRequest>;
+    const payload = body as AnalyzeRequest;
 
-    if (payload.card_type !== 'pokemon') {
+    // v1 supports pokemon + (milestone) trainer/energy via the Python source of truth.
+    if (payload.card_type !== 'pokemon' && payload.card_type !== 'trainer' && payload.card_type !== 'energy') {
       const err: ErrorResponse = {
         api_version: API_VERSION,
         request_id: (req as any).requestId ?? null,
         error_code: ErrorCode.UNSUPPORTED_CARD_TYPE,
-        error_message: "Only card_type='pokemon' is supported."
+        error_message: "Only card_type in ['pokemon','trainer','energy'] is supported."
       };
       return reply.code(400).send(err);
     }
 
+    // Allow either inline base64 (quickstart) OR upload reference (preferred).
     if (!payload.front_image || payload.front_image.encoding !== 'base64' || typeof payload.front_image.data !== 'string') {
       const err: ErrorResponse = {
         api_version: API_VERSION,
@@ -275,23 +281,33 @@ app.post(
       return reply.code(400).send(err);
     }
 
-    // Deterministic request_id derived from payload content (mirrors the Python API shell).
-    const requestId = crypto
-      .createHash('sha256')
-      .update(payload.front_image.data)
-      .digest('hex')
-      .slice(0, 32);
+    const pythonBaseUrl = (process.env.PREGRADE_PYTHON_BASE_URL ?? '').trim();
+    if (!pythonBaseUrl) {
+      const err: ErrorResponse = {
+        api_version: API_VERSION,
+        request_id: (req as any).requestId ?? null,
+        error_code: ErrorCode.NOT_IMPLEMENTED,
+        error_message: 'Analyze not configured. Set PREGRADE_PYTHON_BASE_URL to proxy to the Python service.'
+      };
+      return reply.code(501).send(err);
+    }
 
-    const resp: AnalyzeResponse = {
-      api_version: API_VERSION,
-      request_id: requestId,
-      processed_at: '1970-01-01T00:00:00Z',
-      gatekeeper: { ok: false, reason: GatekeeperReason.NOT_IMPLEMENTED },
-      identity: { name: null, set: null, number: null, confidence: null },
-      roi: { ok: false, expected_value: null, grading_cost: null, notes: 'Gateway stub. Python Lambda is the current source of truth.' }
-    };
-
-    return reply.code(501).send(resp);
+    // Proxy to Python (source of truth) for real results.
+    try {
+      const { proxyAnalyzeToPython } = await import('./pythonProxy.js');
+      const timeoutMs = Number.parseInt(process.env.PREGRADE_PYTHON_TIMEOUT_MS ?? '120000', 10) || 120_000;
+      const resp = await proxyAnalyzeToPython({ baseUrl: pythonBaseUrl, timeoutMs }, payload);
+      return reply.code(200).send(resp);
+    } catch (e: any) {
+      req.log.error({ err: e }, 'Python analyze proxy failed');
+      const err: ErrorResponse = {
+        api_version: API_VERSION,
+        request_id: (req as any).requestId ?? null,
+        error_code: ErrorCode.INTERNAL_ERROR,
+        error_message: 'Analyze proxy failed.'
+      };
+      return reply.code(500).send(err);
+    }
   }
 );
 
