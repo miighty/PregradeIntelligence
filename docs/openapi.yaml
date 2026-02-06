@@ -41,13 +41,53 @@ paths:
                 ok: true
                 api_version: "1.0"
 
+  /v1/uploads:
+    post:
+      summary: Create a signed upload URL (S3 presigned PUT)
+      description: |
+        Returns a short-lived URL that the client can `PUT` the image bytes to.
+
+        This is the recommended partner flow (keeps base64 out of request bodies).
+      operationId: createUpload
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUploadRequest"
+            example:
+              kind: front_image
+              content_type: image/jpeg
+              content_length: 345678
+      responses:
+        "200":
+          description: Upload URL created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateUploadResponse"
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Authentication failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /v1/analyze:
     post:
       summary: Analyze card (front only)
       description: |
-        Analyzes a Pokemon card front image and returns identity, condition signals,
+        Analyzes a card front image and returns identity, condition signals,
         gatekeeper result, and ROI recommendation.
-        
+
+        Supported `card_type` (milestone): `pokemon`, `trainer`, `energy`.
+
         Back image is accepted but not currently used in this endpoint.
       operationId: analyzeCard
       requestBody:
@@ -264,7 +304,9 @@ components:
           type: string
           enum:
             - pokemon
-          description: Only 'pokemon' is supported.
+            - trainer
+            - energy
+          description: Supported card types in this milestone.
         front_image:
           $ref: "#/components/schemas/ImageInput"
         back_image:
@@ -291,6 +333,49 @@ components:
           $ref: "#/components/schemas/ImageInput"
         client_reference:
           type: string
+
+    CreateUploadRequest:
+      type: object
+      required:
+        - kind
+        - content_type
+        - content_length
+      properties:
+        kind:
+          type: string
+          enum: [front_image, back_image]
+        content_type:
+          type: string
+          example: image/jpeg
+        content_length:
+          type: integer
+          example: 345678
+
+    CreateUploadResponse:
+      type: object
+      required:
+        - api_version
+        - request_id
+        - upload_id
+        - put_url
+        - object_url
+        - expires_at
+      properties:
+        api_version:
+          type: string
+        request_id:
+          type: string
+        upload_id:
+          type: string
+        put_url:
+          type: string
+          description: Presigned PUT URL.
+        object_url:
+          type: string
+          description: S3 locator for the uploaded object.
+        expires_at:
+          type: string
+          format: date-time
 
     AnalyzeResponse:
       type: object
