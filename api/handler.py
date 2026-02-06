@@ -364,12 +364,12 @@ def _handle_analyze(event: dict[str, Any]) -> dict[str, Any]:
     encoding = front.get("encoding")
     data = front.get("data")
 
-    if encoding != "base64":
+    if encoding not in {"base64", "url"}:
         err = ErrorResponse(
             api_version=_API_VERSION,
             request_id=None,
             error_code=ErrorCode.INVALID_FIELD_VALUE.value,
-            error_message="Only front_image.encoding='base64' is supported in this milestone.",
+            error_message="Only front_image.encoding in {'base64','url'} is supported in this milestone.",
         )
         return response(400, err.to_dict())
 
@@ -382,16 +382,34 @@ def _handle_analyze(event: dict[str, Any]) -> dict[str, Any]:
         )
         return response(400, err.to_dict())
 
-    try:
-        image_bytes = base64.b64decode(data)
-    except Exception:
-        err = ErrorResponse(
-            api_version=_API_VERSION,
-            request_id=None,
-            error_code=ErrorCode.INVALID_IMAGE_FORMAT.value,
-            error_message="front_image.data must be valid base64.",
-        )
-        return response(400, err.to_dict())
+    # Load image bytes
+    if encoding == "base64":
+        try:
+            image_bytes = base64.b64decode(data)
+        except Exception:
+            err = ErrorResponse(
+                api_version=_API_VERSION,
+                request_id=None,
+                error_code=ErrorCode.INVALID_IMAGE_FORMAT.value,
+                error_message="front_image.data must be valid base64.",
+            )
+            return response(400, err.to_dict())
+    else:
+        # encoding == 'url' (e.g., S3 presigned GET URL)
+        try:
+            from urllib.request import Request, urlopen
+
+            req = Request(data, headers={"user-agent": "pregrade/1.0"})
+            with urlopen(req, timeout=15) as r:
+                image_bytes = r.read(15 * 1024 * 1024)  # hard cap 15MB read
+        except Exception:
+            err = ErrorResponse(
+                api_version=_API_VERSION,
+                request_id=None,
+                error_code=ErrorCode.INVALID_IMAGE_FORMAT.value,
+                error_message="front_image.data URL could not be fetched.",
+            )
+            return response(400, err.to_dict())
 
     # Deterministic request_id based on image + key fields.
     # Include card_type so the same bytes sent with different declared card_type

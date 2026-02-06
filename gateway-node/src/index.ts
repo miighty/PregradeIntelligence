@@ -2,7 +2,7 @@ import Fastify from 'fastify';
 import crypto from 'node:crypto';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import {
   API_VERSION,
@@ -195,16 +195,23 @@ app.post(
     const extension = extensionForContentType(payload.content_type);
     const objectKey = `${UPLOADS_S3_PREFIX}${payload.kind}/${uploadId}${extension}`;
 
-    const command = new PutObjectCommand({
+    const putCommand = new PutObjectCommand({
       Bucket: UPLOADS_S3_BUCKET,
       Key: objectKey,
       ContentType: payload.content_type
     });
 
+    const getCommand = new GetObjectCommand({
+      Bucket: UPLOADS_S3_BUCKET,
+      Key: objectKey
+    });
+
     const expiresAt = new Date(Date.now() + UPLOADS_URL_TTL_SECONDS * 1000);
     let putUrl: string;
+    let getUrl: string;
     try {
-      putUrl = await getSignedUrl(getS3Client(), command, { expiresIn: UPLOADS_URL_TTL_SECONDS });
+      putUrl = await getSignedUrl(getS3Client(), putCommand, { expiresIn: UPLOADS_URL_TTL_SECONDS });
+      getUrl = await getSignedUrl(getS3Client(), getCommand, { expiresIn: UPLOADS_URL_TTL_SECONDS });
     } catch (signError) {
       req.log.error({ err: signError }, 'Failed to generate presigned URL');
       const err: ErrorResponse = {
@@ -221,6 +228,7 @@ app.post(
       request_id: (req as any).requestId,
       upload_id: uploadId,
       put_url: putUrl,
+      get_url: getUrl,
       object_url: `s3://${UPLOADS_S3_BUCKET}/${objectKey}`,
       expires_at: expiresAt.toISOString()
     };

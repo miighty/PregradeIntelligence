@@ -42,33 +42,23 @@ export const GatekeeperReason = {
 export type GatekeeperReason = (typeof GatekeeperReason)[keyof typeof GatekeeperReason];
 
 export type AnalyzeRequest = {
-  card_type: 'pokemon';
+  card_type: 'pokemon' | 'trainer' | 'energy';
   front_image: {
-    encoding: 'base64';
+    encoding: 'base64' | 'url';
     data: string;
   };
+  back_image?: {
+    encoding: 'base64' | 'url';
+    data: string;
+  } | null;
+  client_reference?: string | null;
 };
 
 export type AnalyzeResponse = {
   api_version: string;
   request_id: string;
-  processed_at: string;
-  gatekeeper: {
-    ok: boolean;
-    reason: GatekeeperReason | null;
-  };
-  identity: {
-    name: string | null;
-    set: string | null;
-    number: string | null;
-    confidence: number | null;
-  };
-  roi: {
-    ok: boolean;
-    expected_value: number | null;
-    grading_cost: number | null;
-    notes: string | null;
-  };
+  client_reference?: string;
+  result: any;
 };
 
 // Uploads (signed upload flow) — stubbed for now.
@@ -83,9 +73,10 @@ export type CreateUploadResponse = {
   api_version: string;
   request_id: string;
   upload_id: string;
-  // In the real impl this will be an S3 presigned URL.
   put_url: string;
-  // Where the API expects to read the object later.
+  // Presigned GET URL to read the object (useful for analyze via front_image.encoding='url').
+  get_url: string;
+  // Stable locator.
   object_url: string;
   expires_at: string;
 };

@@ -35,12 +35,13 @@ export const CreateUploadRequestSchema = {
 
 export const CreateUploadResponseSchema = {
   type: 'object',
-  required: ['api_version', 'request_id', 'upload_id', 'put_url', 'object_url', 'expires_at'],
+  required: ['api_version', 'request_id', 'upload_id', 'put_url', 'get_url', 'object_url', 'expires_at'],
   properties: {
     api_version: { type: 'string', enum: [API_VERSION] },
     request_id: { type: 'string' },
     upload_id: { type: 'string' },
     put_url: { type: 'string' },
+    get_url: { type: 'string' },
     object_url: { type: 'string' },
     expires_at: { type: 'string' }
   }
@@ -50,12 +51,12 @@ export const AnalyzeRequestSchema = {
   type: 'object',
   required: ['card_type', 'front_image'],
   properties: {
-    card_type: { type: 'string', enum: ['pokemon'] },
+    card_type: { type: 'string', enum: ['pokemon', 'trainer', 'energy'] },
     front_image: {
       type: 'object',
       required: ['encoding', 'data'],
       properties: {
-        encoding: { type: 'string', enum: ['base64'] },
+        encoding: { type: 'string', enum: ['base64', 'url'] },
         data: { type: 'string' }
       }
     },
@@ -66,49 +67,23 @@ export const AnalyzeRequestSchema = {
           type: 'object',
           required: ['encoding', 'data'],
           properties: {
-            encoding: { type: 'string', enum: ['base64'] },
+            encoding: { type: 'string', enum: ['base64', 'url'] },
             data: { type: 'string' }
           }
         }
       ]
-    }
+    },
+    client_reference: { anyOf: [{ type: 'string' }, { type: 'null' }] }
   }
 } as const;
 
 export const AnalyzeResponseSchema = {
   type: 'object',
-  required: ['api_version', 'request_id', 'processed_at', 'gatekeeper', 'identity', 'roi'],
+  required: ['api_version', 'request_id', 'result'],
   properties: {
     api_version: { type: 'string', enum: [API_VERSION] },
     request_id: { type: 'string' },
-    processed_at: { type: 'string' },
-    gatekeeper: {
-      type: 'object',
-      required: ['ok', 'reason'],
-      properties: {
-        ok: { type: 'boolean' },
-        reason: { type: 'string', enum: Object.values(GatekeeperReason) }
-      }
-    },
-    identity: {
-      type: 'object',
-      required: ['name', 'set', 'number', 'confidence'],
-      properties: {
-        name: { anyOf: [{ type: 'string' }, { type: 'null' }] },
-        set: { anyOf: [{ type: 'string' }, { type: 'null' }] },
-        number: { anyOf: [{ type: 'string' }, { type: 'null' }] },
-        confidence: { anyOf: [{ type: 'number' }, { type: 'null' }] }
-      }
-    },
-    roi: {
-      type: 'object',
-      required: ['ok', 'expected_value', 'grading_cost', 'notes'],
-      properties: {
-        ok: { type: 'boolean' },
-        expected_value: { anyOf: [{ type: 'number' }, { type: 'null' }] },
-        grading_cost: { anyOf: [{ type: 'number' }, { type: 'null' }] },
-        notes: { anyOf: [{ type: 'string' }, { type: 'null' }] }
-      }
-    }
+    client_reference: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+    result: { type: 'object' }
   }
 } as const;
