@@ -68,3 +68,6 @@ exports/
 # Eval artifacts (CSV outputs)
 eval/*results*.csv
 eval/*confidence*.csv
+
+# Local Netlify folder
+.netlify

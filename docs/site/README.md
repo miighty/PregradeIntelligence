@@ -7,12 +7,20 @@ This folder contains a minimal static **Redoc** page that loads the OpenAPI spec
 
 ## Netlify deployment
 
+Deploy this folder as its own site so you can keep the landing on **pregrade.co** (existing site) and serve docs from this one (e.g. **docs.pregrade.co** or **pregrade-docs.netlify.app**).
+
 1. **Base directory:** `docs/site`
 2. **Build command:** *(leave empty)*
 3. **Publish directory:** `.`
-4. Set the Netlify site to use custom domain **pregrade.co**.
+4. Optionally set a custom domain (e.g. **docs.pregrade.co**).
 
-Then `https://pregrade.co/v1/docs` will serve Redoc, and Redoc will fetch the spec from `/v1/openapi.yaml`, which Netlify proxies to the API.
+Then `https://<site>/v1/docs` serves Redoc, and the spec is loaded from `/v1/openapi.yaml` (proxied via `_redirects`).
+
+### Custom domain (docs.pregrade.co)
+
+1. At your DNS provider for **pregrade.co**, create: **CNAME** `docs` → `pregrade-docs.netlify.app`.
+2. After propagation, in Netlify (pregrade-docs site), add custom domain **docs.pregrade.co**; Netlify will provision SSL.
+3. **https://docs.pregrade.co/v1/docs** will then serve Redoc.
 
 ### _redirects rules
 
