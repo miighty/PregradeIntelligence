@@ -1,5 +1,7 @@
 import Fastify from 'fastify';
 import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
 import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
@@ -67,8 +69,13 @@ const app = Fastify({
 });
 
 // request_id for all responses (including auth/rate errors)
-app.addHook('onRequest', async (req) => {
-  (req as any).requestId = crypto.randomUUID();
+// If caller provides X-Request-Id, we echo it back for trace correlation.
+app.addHook('onRequest', async (req, reply) => {
+  const header = req.headers['x-request-id'];
+  const incoming = Array.isArray(header) ? header[0] : header;
+  const requestId = (typeof incoming === 'string' && incoming.trim().length > 0) ? incoming.trim() : crypto.randomUUID();
+  (req as any).requestId = requestId;
+  reply.header('x-request-id', requestId);
 });
 
 await app.register(swagger, {
@@ -84,8 +91,18 @@ await app.register(swaggerUi, {
   routePrefix: '/docs'
 });
 
+// Serve the repo's authoritative OpenAPI file (kept in sync with Python contracts).
+const openapiYamlPath = path.resolve(process.cwd(), '..', 'docs', 'openapi.yaml');
+let openapiYaml: string | null = null;
+try {
+  openapiYaml = await fs.readFile(openapiYamlPath, 'utf8');
+} catch {
+  // Keep gateway usable even when docs aren't present in a packaged build.
+  openapiYaml = null;
+}
+
 // Apply auth + rate limiting to v1 routes.
-app.addHook('preHandler', authAndRateLimit({ exemptPaths: ['/v1/health', '/docs'] }));
+app.addHook('preHandler', authAndRateLimit({ exemptPaths: ['/v1/health', '/v1/openapi.yaml', '/docs'] }));
 
 app.get(
   '/v1/health',
@@ -101,6 +118,21 @@ app.get(
     return { ok: true, api_version: API_VERSION };
   }
 );
+
+app.get('/v1/openapi.yaml', async (req, reply) => {
+  if (!openapiYaml) {
+    const err: ErrorResponse = {
+      api_version: API_VERSION,
+      request_id: (req as any).requestId ?? null,
+      error_code: ErrorCode.NOT_IMPLEMENTED,
+      error_message: 'OpenAPI file not available in this build.'
+    };
+    return reply.code(501).send(err);
+  }
+
+  reply.type('text/yaml; charset=utf-8');
+  return reply.code(200).send(openapiYaml);
+});
 
 app.post(
   '/v1/uploads',

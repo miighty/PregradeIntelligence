@@ -30,7 +30,10 @@ curl -s http://127.0.0.1:3000/v1/health
 # Swagger UI
 open http://127.0.0.1:3000/docs
 
-# signed upload flow (stub)
+# OpenAPI (authoritative file from repo root)
+curl -s http://127.0.0.1:3000/v1/openapi.yaml | head
+
+# Signed upload flow (returns 501 unless S3 env vars are configured)
 curl -s -X POST http://127.0.0.1:3000/v1/uploads \
   -H 'content-type: application/json' \
   -H 'x-api-key: dev_key' \
@@ -45,5 +48,5 @@ curl -s -X POST http://127.0.0.1:3000/v1/analyze \
 ## Next steps
 
 1. Add a **proxy/invocation path** to the existing Python Lambda handler (AWS SDK invoke / local bridge).
-2. Replace `/v1/uploads` stub with a real **S3 presigned PUT** implementation.
+2. Wire `/v1/analyze` to the Python Lambda (invoke in AWS; local bridge for dev).
 3. Add explicit **Gatekeeper** and **async job** endpoints.
