@@ -363,6 +363,47 @@ app.setNotFoundHandler((req, reply) => {
   return reply.code(404).send(err);
 });
 
+app.addHook('onResponse', async (req, reply) => {
+  try {
+    const { logUsage } = await import('./usage.js');
+
+    // Best-effort usage logging (no impact on response).
+    const tenantId = (req as any).tenantId as string | undefined;
+    const apiKeyId = (req as any).apiKeyId as string | undefined;
+    const requestId = (req as any).requestId as string | undefined;
+
+    // Gatekeeper info: only for analyze responses where we return Python envelope.
+    let gatekeeperAccepted: boolean | null = null;
+    let reasonCodes: string[] | null = null;
+
+    if (req.url.startsWith('/v1/analyze') && typeof (reply as any).payload === 'string') {
+      try {
+        const parsed = JSON.parse((reply as any).payload);
+        const gk = parsed?.result?.gatekeeper_result;
+        if (gk && typeof gk.accepted === 'boolean') {
+          gatekeeperAccepted = gk.accepted;
+          reasonCodes = Array.isArray(gk.reason_codes) ? gk.reason_codes : null;
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    await logUsage({
+      tenantId,
+      apiKeyId,
+      requestId,
+      route: `${req.method} ${req.url.split('?')[0]}`,
+      statusCode: reply.statusCode,
+      durationMs: (reply as any).elapsedTime ? Math.round((reply as any).elapsedTime) : undefined,
+      gatekeeperAccepted,
+      reasonCodes
+    });
+  } catch {
+    // ignore
+  }
+});
+
 app.setErrorHandler((error, req, reply) => {
   const err: ErrorResponse = {
     api_version: API_VERSION,
