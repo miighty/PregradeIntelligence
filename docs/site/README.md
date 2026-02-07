@@ -1,16 +1,21 @@
 # Hosted API docs (static)
 
-This folder contains a minimal static **Redoc** page.
+This folder contains a minimal static **Redoc** page that loads the OpenAPI spec from `/v1/openapi.yaml`.
 
-## Local usage
+- `redoc.html` — loads Redoc from the CDN and uses `spec-url="/v1/openapi.yaml"`.
+- `_redirects` — Netlify rewrite/proxy rules so that `/v1/docs` serves the Redoc page and `/v1/openapi.yaml` is proxied to the API gateway.
 
-If your gateway serves `GET /v1/openapi.yaml`, you can serve this file on the same host and it will render docs automatically.
+## Netlify deployment
 
-- `redoc.html` expects the spec at: `/v1/openapi.yaml`
+1. **Base directory:** `docs/site`
+2. **Build command:** *(leave empty)*
+3. **Publish directory:** `.`
+4. Set the Netlify site to use custom domain **pregrade.co**.
 
-## Deploy options
+Then `https://pregrade.co/v1/docs` will serve Redoc, and Redoc will fetch the spec from `/v1/openapi.yaml`, which Netlify proxies to the API.
 
-- Serve this via any static host (Cloudflare Pages, Vercel, Netlify, S3+CloudFront).
-- Easiest: put it behind `https://pregrade.co` and proxy `/v1/openapi.yaml` to your gateway.
+### _redirects rules
 
-If you need the spec to be at a different URL, edit `spec-url` in `redoc.html`.
+- `/v1/docs` and `/v1/docs/*` → serve `redoc.html` (200 rewrite).
+- `/v1/openapi.yaml` → proxy to `https://api.pregrade.co/v1/openapi.yaml` (200).  
+  If your API gateway uses a different hostname, edit this line in `_redirects`.

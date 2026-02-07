@@ -1,0 +1,3 @@
+/v1/docs    /redoc.html   200
+/v1/docs/*  /redoc.html   200
+/v1/openapi.yaml  https://api.pregrade.co/v1/openapi.yaml  200
