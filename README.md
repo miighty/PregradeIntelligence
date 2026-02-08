@@ -1,6 +1,7 @@
 # PreGrade – Grading Intelligence API (Backend)
 
 PreGrade is a **backend decision-intelligence service** that analyzes trading card images and returns **deterministic JSON** describing:
+
 - **Card identity** (what the card is)
 - **Condition signals** (what is observable; not a grade)
 - **Gatekeeper acceptance/rejection** (including structured rejection reasons)
@@ -17,177 +18,182 @@ This repository is **backend-only** and **Lambda-first** for AWS.
 - **No price prediction claims**.
 - **No consumer UI**: No frontend or end-user application in this repository.
 
-## Architecture constraints (authoritative)
+---
 
-- **Cloud**: AWS
-- **Compute**: Lambda-first
-- **API**: REST
-- **Auth**: API keys
-- **Storage**: S3
-- **Card scope (initial)**: Pokémon cards only; front image required; back optional
+## Architecture overview
 
-## Language choice
+The system has two runtimes that work together:
 
-**Python** is the chosen backend language for this service because it is a strong fit for Lambda-first backends and image analysis workloads:
+| Component | Role | When to run |
+|-----------|------|-------------|
+| **Python (Lambda / local server)** | Source of truth for analysis and grading. Runs OCR, condition signals, gatekeeper, grade inference. | Required for `/v1/analyze`, `/v1/grade`, and async jobs. |
+| **Node gateway** (`gateway-node/`) | Partner-facing API. Handles auth, rate limiting, signed uploads, and proxies analyze/grade to Python. Optional async job queue. | Run for partner integrations and local dev behind one URL. |
 
-> Note: some ML wheels (notably `onnxruntime` / `torch`) may lag on the very latest Python versions.
-> If you hit install issues on Python 3.13, use the provided `scripts/bootstrap_venv_py310.sh`.
-- **AWS-native**: first-class Lambda support and a mature AWS SDK ecosystem.
-- **Image ecosystem**: broad, production-tested libraries for image decoding, transforms, and quality checks.
-- **Determinism-friendly**: straightforward to enforce stable ordering, fixed thresholds, and controlled numeric behavior in a service that must be reproducible.
+**Data flow (local dev):** Client → Node gateway (port 3000) → Python local server (port 8001).  
+**Production:** Client → Node gateway → Python Lambda (or Python behind API Gateway).
 
-## Repository structure
+- **Python-only:** You can run the Python API alone (Lambda or `api/local_server.py`) and call it directly.
+- **Full stack (recommended for partners):** Run both: Python local server + Node gateway; point the gateway at the Python base URL.
 
-- `docs/`: product documentation (see `docs/prd.md`)
-- `api/`: REST API surface (handlers, request/response contracts)
-- `domain/`: core domain entities and schemas (no business logic unless explicitly requested)
-- `services/`: application services/orchestration (kept deterministic and explainable)
-- `infrastructure/`: AWS/Lambda wiring and deployment artifacts (when explicitly requested)
-- `tests/`: automated tests
+---
 
-## Validation approach (identity + gatekeeper first)
+## One-command bootstrap
 
-Validation is staged and evidence-driven, starting with the highest-leverage, most falsifiable parts of the system:
-
-- **Identity validation (first milestone)**:
-  - Confirm the service can reliably identify Pokémon cards from real-world images (variable lighting, sleeves, glare, imperfect framing).
-  - Measure repeatability: same input → same identity output.
-  - Track failure modes with structured reason codes.
-
-- **Gatekeeper validation (second milestone)**:
-  - Validate deterministic acceptance/rejection outcomes for minimum-quality inputs.
-  - Ensure rejection is a **valid, billable** outcome represented as structured JSON with reason codes.
-  - Require explainability: every rejection must include actionable, transparent reasons.
-
-Only after identity and gatekeeper behavior are validated should downstream recommendation logic be evaluated, and it must always remain **ROI-framed** with explicit assumptions and reason codes.
-
-## Product specification
-
-The full product requirements are captured verbatim in:
-- `docs/prd.md`
-
-API surface documentation (minimal v1 shell):
-- `docs/api.md`
-
-## Local setup
-
-Install dependencies:
+### Python (analysis + grading engine)
 
 ```bash
-pip install -r requirements.txt
-```
-
-If you are on macOS with an externally managed Python, use the safe venv bootstrap:
-
-```bash
+# From repo root. Creates .venv if missing; does not delete existing .venv.
 bash scripts/bootstrap_venv_safe.sh
 source .venv/bin/activate
 ```
 
-## API docs
-
-Minimal v1 API documentation is in `docs/api.md`.
-The Python Lambda handler at `api/handler.py` is the current source of truth.
-
-## Run locally (unit-test style)
-
-You can invoke the Lambda handler directly with an API Gateway–style event.
-Example (front image must be base64):
+Then install and run tests:
 
 ```bash
-python - <<'PY'
-import base64
-import json
-from pathlib import Path
-
-from api.handler import lambda_handler
-
-image_path = Path("/path/to/front.png")
-image_b64 = base64.b64encode(image_path.read_bytes()).decode("utf-8")
-
-event = {
-    "httpMethod": "POST",
-    "path": "/v1/analyze",
-    "headers": {"content-type": "application/json"},
-    "body": json.dumps({
-        "card_type": "pokemon",
-        "front_image": {"encoding": "base64", "data": image_b64},
-    }),
-    "isBase64Encoded": False,
-}
-
-resp = lambda_handler(event, None)
-print(resp["statusCode"])
-print(resp["body"])
-PY
+pip install -r requirements.txt
+pytest
 ```
 
-Or use the helper script:
+### Node gateway (partner API)
+
+```bash
+cd gateway-node
+npm install
+cp .env.example .env
+# Edit .env if needed (see Environment variables below).
+npm run dev
+```
+
+Gateway listens on `http://127.0.0.1:3000` (health: `GET /v1/health`, docs: `GET /docs`).
+
+### Run both together (local dev)
+
+1. **Terminal 1 – Python (source of truth):**
+   ```bash
+   source .venv/bin/activate
+   python api/local_server.py --host 127.0.0.1 --port 8001
+   ```
+
+2. **Terminal 2 – Node gateway (proxies to Python):**
+   ```bash
+   cd gateway-node
+   export PREGRADE_PYTHON_BASE_URL=http://127.0.0.1:8001
+   npm run dev
+   ```
+
+3. Call the gateway: `curl http://127.0.0.1:3000/v1/health` and `POST /v1/analyze` or `POST /v1/grade` with your API key.
+
+---
+
+## Repository structure
+
+| Path | Purpose |
+|------|---------|
+| `api/` | REST handlers (Lambda + local server), request/response schemas |
+| `domain/` | Core domain types (CardIdentity, GatekeeperResult, etc.) |
+| `services/` | Business logic: card identity, grading, condition signals |
+| `gateway-node/` | Node + TypeScript Fastify gateway (auth, rate limit, uploads, proxy to Python) |
+| `infrastructure/` | Supabase schema (tenants, api_keys, usage_events, jobs) |
+| `docs/` | PRD, API docs, OpenAPI, quickstart |
+| `tests/` | Python tests |
+
+---
+
+## Environment variables
+
+### Python (Lambda / local server)
+
+| Variable | Purpose |
+|----------|---------|
+| `PREGRADE_API_KEYS` | Optional. Comma-separated keys; if set, `X-API-Key` is required. |
+| `PREGRADE_RATE_LIMIT_PER_MIN` | Optional. In-memory per-minute limit; if unset, no limit. |
+| `PREGRADE_ENABLE_ENRICHMENT` | Optional. `1` = TCGdex enrichment (HTTP). Off by default. |
+| `PREGRADE_SKIP_OCR` | Optional. `1` = skip OCR (placeholder identity; for fast tests). |
+
+### Node gateway
+
+| Variable | Purpose |
+|----------|---------|
+| `PREGRADE_API_KEYS` | Comma-separated keys for simple auth (no Supabase). |
+| `PREGRADE_RATE_LIMIT_PER_MIN` | In-memory per-minute rate limit. |
+| `PREGRADE_PYTHON_BASE_URL` | **Required for analyze/grade/jobs.** Base URL of Python API (e.g. `http://127.0.0.1:8001`). |
+| `PREGRADE_PYTHON_TIMEOUT_MS` | Timeout for Python proxy (default `120000`). |
+| `PREGRADE_UPLOADS_S3_BUCKET` | S3 bucket for signed uploads; if unset, `/v1/uploads` returns 501. |
+| `PREGRADE_UPLOADS_S3_REGION` | S3 region for uploads. |
+| `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | If set, API keys are validated against Supabase `api_keys`; usage and jobs use Supabase. |
+| `PREGRADE_API_KEY_HASH_SALT` | Salt for hashing API keys (Supabase auth). |
+| `HOST`, `PORT` | Listen address (default `127.0.0.1:3000`). |
+| `LOG_LEVEL` | Log level (default `info`). |
+
+---
+
+## API surface (gateway)
+
+- `GET /v1/health` — Health check.
+- `GET /v1/openapi.yaml` — Authoritative OpenAPI from `docs/openapi.yaml`.
+- `GET /docs` — Swagger UI.
+- `POST /v1/uploads` — Request presigned S3 PUT/GET URLs (returns 501 if S3 not configured).
+- `POST /v1/analyze` — Analyze card (front image; optional back). Proxies to Python. Supports `front_image.encoding`: `base64` or `url`.
+- `POST /v1/grade` — Grade card (front + back required, base64). Proxies to Python.
+- `POST /v1/jobs` — Create async analysis job (same body as analyze). Requires Supabase.
+- `GET /v1/jobs/:id` — Poll job status and result.
+
+Auth: send `X-API-Key` if `PREGRADE_API_KEYS` or Supabase is configured.  
+Observability: `X-Request-Id` echoed; `X-Response-Time-Ms` and structured request logs.
+
+---
+
+## Product specification
+
+- **Product requirements:** `docs/prd.md`
+- **API narrative:** `docs/api.md`
+- **Quickstart (curl, upload flow, gatekeeper):** `docs/quickstart.md`
+- **Gap audit vs PRD:** `docs/PRD_GAPS.md`
+
+---
+
+## Local testing (Python only)
+
+Invoke the Lambda handler directly:
 
 ```bash
 python scripts/run_analyze.py --front /path/to/front.png
 ```
 
-## Validate outputs
+Or call the local HTTP server (after starting it):
 
-Recommended checks for a single image:
+```bash
+curl -s http://127.0.0.1:8001/v1/health
+```
 
-- **Determinism**: run the same input twice; `request_id` and outputs must match.
-- **Identity**: verify `card_identity.card_name` and `confidence` look reasonable.
-- **Gatekeeper**: ensure rejected inputs return structured reason codes.
-- **Condition signals**: verify `condition_signals` are explainable and tied to visible evidence.
+---
 
-### Optional runtime flags
+## Validation and determinism
 
-- `PREGRADE_ENABLE_ENRICHMENT=1` — enables best-effort TCGdex enrichment (external HTTP calls). Off by default to keep the core API deterministic/offline-friendly and avoid long-tail latency.
-- `PREGRADE_SKIP_OCR=1` — skips the expensive warp/OCR identity extraction and returns a deterministic placeholder identity (useful for fast unit tests / local scaffolding).
+- **Determinism:** Same input → same `request_id` and outputs.
+- **Gatekeeper:** Rejections are valid outcomes with `reason_codes` and explanations.
+- **Condition signals:** Tied to evidence and severity labels.
 
-Key dependencies:
-- **opencv-python** (`>=4.9.0`): Required for card warp/perspective correction. The service will raise a clear error if missing.
-- **pytesseract** (`>=0.3.10`): OCR for card identity extraction. Requires Tesseract to be installed on your system.
-- **Pillow**, **numpy**: Image processing fundamentals.
-
-## Local evaluation scripts (identity)
-
-Warp debug (overlay quad + warped outputs):
-- `python -m eval.warp_debug --front-dir /path/to/images --out-dir eval/warp_debug --limit 50`
-
-Card number hit-rate (batch + resume):
-- `python -m eval.number_hit_rate_warped --front-dir /path/to/images --batch-size 50 --resume-file eval/number_hit_rate_warped.json`
-
-Identity batch eval (JSON + warp trace):
-- `python -m eval.run_eval --front-dir /path/to/images --json`
-
-Optional debug crops for failed number extraction:
-- `PREGRADE_DEBUG_NUMBER_CROPS=1 python -m eval.number_hit_rate_warped --front-dir /path/to/images`
+---
 
 ## Demo UI
 
-A web-based demo for client presentations is available in `demo/`.
-
-To run locally:
-
 ```bash
-# Install dependencies (if not already done)
 pip install flask flask-cors
-
-# Start the demo server
 python demo/server.py
 ```
 
-Then open **http://localhost:5000** in your browser. Upload front and back images to see:
+Open **http://localhost:5000** for grade distribution, centering, condition signals, and photo quality.
 
-- Grade distribution (likelihood of PSA 10/9/8/7-)
-- Centering analysis (L/R and T/B percentages)
-- Condition signals (corners, edges, surface)
-- Photo quality metrics
+---
 
-## Node/TypeScript gateway (PRD-alignment, staged)
+## Language and constraints
 
-The PRD target includes a Node.js + TypeScript gateway (Fastify/Nest). To avoid a Python→Node big-bang rewrite, a **minimal Fastify TypeScript skeleton** lives in:
+- **Cloud:** AWS
+- **Compute:** Lambda-first
+- **API:** REST
+- **Auth:** API keys
+- **Storage:** S3 (signed uploads via gateway)
 
-- `gateway-node/`
-
-It currently exposes `/v1/health` and a contract-shaped stub for `/v1/analyze` (returns `501`), plus API key + rate limit scaffolding.
-The Python Lambda handler under `api/handler.py` remains the current source of truth.
-
+**Python** is used for the analysis engine (Lambda, image/OCR ecosystem, determinism).  
+**Node + TypeScript** is used for the partner-facing gateway (Fastify, auth, rate limit, proxy).

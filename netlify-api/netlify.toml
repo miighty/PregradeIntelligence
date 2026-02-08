@@ -1,0 +1,19 @@
+[build]
+  publish = "public"
+  functions = "netlify/functions"
+
+# Route API paths to functions
+[[redirects]]
+  from = "/v1/health"
+  to = "/.netlify/functions/health"
+  status = 200
+
+[[redirects]]
+  from = "/v1/openapi.yaml"
+  to = "/.netlify/functions/openapi"
+  status = 200
+
+[[redirects]]
+  from = "/v1/*"
+  to = "/.netlify/functions/not-implemented"
+  status = 200

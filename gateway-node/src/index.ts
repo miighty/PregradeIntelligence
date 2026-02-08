@@ -9,12 +9,11 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import {
   API_VERSION,
   ErrorCode,
-  GatekeeperReason,
   type AnalyzeRequest,
-  type AnalyzeResponse,
   type CreateUploadRequest,
   type CreateUploadResponse,
-  type ErrorResponse
+  type ErrorResponse,
+  type GradeRequest
 } from './contracts.js';
 import { authAndRateLimit } from './auth.js';
 import {
@@ -22,9 +21,14 @@ import {
   AnalyzeResponseSchema,
   CreateUploadRequestSchema,
   CreateUploadResponseSchema,
+  CreateJobResponseSchema,
   ErrorResponseSchema,
-  HealthResponseSchema
+  GradeRequestSchema,
+  GradeResponseSchema,
+  HealthResponseSchema,
+  JobStatusResponseSchema
 } from './schemas.js';
+import { createJob, getJob, runJobInBackground } from './jobs.js';
 
 // --- S3 Upload Configuration ---
 const UPLOADS_S3_BUCKET = (process.env.PREGRADE_UPLOADS_S3_BUCKET ?? '').trim();
@@ -76,6 +80,14 @@ app.addHook('onRequest', async (req, reply) => {
   const requestId = (typeof incoming === 'string' && incoming.trim().length > 0) ? incoming.trim() : crypto.randomUUID();
   (req as any).requestId = requestId;
   reply.header('x-request-id', requestId);
+});
+
+// Observability: response time header (before payload is sent).
+app.addHook('onSend', async (_req, reply) => {
+  const ms = typeof (reply as any).elapsedTime === 'number' ? Math.round((reply as any).elapsedTime) : undefined;
+  if (ms !== undefined) {
+    reply.header('x-response-time-ms', String(ms));
+  }
 });
 
 await app.register(swagger, {
@@ -310,13 +322,19 @@ app.post(
       return reply.code(400).send(err);
     }
 
-    // Allow either inline base64 (quickstart) OR upload reference (preferred).
-    if (!payload.front_image || payload.front_image.encoding !== 'base64' || typeof payload.front_image.data !== 'string') {
+    // Allow either inline base64 (quickstart) OR url (presigned GET from /v1/uploads).
+    const fi = payload.front_image;
+    if (
+      !fi ||
+      (fi.encoding !== 'base64' && fi.encoding !== 'url') ||
+      typeof fi.data !== 'string' ||
+      !fi.data.trim()
+    ) {
       const err: ErrorResponse = {
         api_version: API_VERSION,
         request_id: (req as any).requestId ?? null,
         error_code: ErrorCode.MISSING_REQUIRED_FIELD,
-        error_message: 'Missing required field: front_image (base64).'
+        error_message: 'Missing required field: front_image (encoding base64 or url, non-empty data).'
       };
       return reply.code(400).send(err);
     }
@@ -351,6 +369,225 @@ app.post(
   }
 );
 
+app.post(
+  '/v1/grade',
+  {
+    schema: {
+      body: GradeRequestSchema,
+      response: {
+        200: GradeResponseSchema,
+        400: ErrorResponseSchema,
+        401: ErrorResponseSchema,
+        429: ErrorResponseSchema,
+        500: ErrorResponseSchema,
+        501: ErrorResponseSchema
+      }
+    }
+  },
+  async (req, reply) => {
+    const body = req.body;
+
+    if (!body || typeof body !== 'object') {
+      const err: ErrorResponse = {
+        api_version: API_VERSION,
+        request_id: (req as any).requestId ?? null,
+        error_code: ErrorCode.INVALID_REQUEST_FORMAT,
+        error_message: 'Request body must be a JSON object.'
+      };
+      return reply.code(400).send(err);
+    }
+
+    const payload = body as Partial<GradeRequest>;
+
+    if (payload.card_type !== 'pokemon') {
+      const err: ErrorResponse = {
+        api_version: API_VERSION,
+        request_id: (req as any).requestId ?? null,
+        error_code: ErrorCode.UNSUPPORTED_CARD_TYPE,
+        error_message: "Only card_type='pokemon' is supported."
+      };
+      return reply.code(400).send(err);
+    }
+
+    const front = payload.front_image;
+    const back = payload.back_image;
+    if (
+      !front ||
+      front.encoding !== 'base64' ||
+      typeof front.data !== 'string' ||
+      !front.data ||
+      !back ||
+      back.encoding !== 'base64' ||
+      typeof back.data !== 'string' ||
+      !back.data
+    ) {
+      const err: ErrorResponse = {
+        api_version: API_VERSION,
+        request_id: (req as any).requestId ?? null,
+        error_code: ErrorCode.MISSING_REQUIRED_FIELD,
+        error_message: 'Missing required fields: front_image and back_image (both base64).'
+      };
+      return reply.code(400).send(err);
+    }
+
+    const pythonBaseUrl = (process.env.PREGRADE_PYTHON_BASE_URL ?? '').trim();
+    if (!pythonBaseUrl) {
+      const err: ErrorResponse = {
+        api_version: API_VERSION,
+        request_id: (req as any).requestId ?? null,
+        error_code: ErrorCode.NOT_IMPLEMENTED,
+        error_message: 'Grade not configured. Set PREGRADE_PYTHON_BASE_URL to proxy to the Python service.'
+      };
+      return reply.code(501).send(err);
+    }
+
+    try {
+      const { proxyGradeToPython } = await import('./pythonProxy.js');
+      const timeoutMs = Number.parseInt(process.env.PREGRADE_PYTHON_TIMEOUT_MS ?? '120000', 10) || 120_000;
+      const resp = await proxyGradeToPython({ baseUrl: pythonBaseUrl, timeoutMs }, payload as GradeRequest);
+      return reply.code(200).send(resp);
+    } catch (e: any) {
+      req.log.error({ err: e }, 'Python grade proxy failed');
+      const err: ErrorResponse = {
+        api_version: API_VERSION,
+        request_id: (req as any).requestId ?? null,
+        error_code: ErrorCode.INTERNAL_ERROR,
+        error_message: 'Grade proxy failed.'
+      };
+      return reply.code(500).send(err);
+    }
+  }
+);
+
+app.post(
+  '/v1/jobs',
+  {
+    schema: {
+      body: AnalyzeRequestSchema,
+      response: {
+        200: CreateJobResponseSchema,
+        400: ErrorResponseSchema,
+        401: ErrorResponseSchema,
+        429: ErrorResponseSchema,
+        500: ErrorResponseSchema,
+        501: ErrorResponseSchema
+      }
+    }
+  },
+  async (req, reply) => {
+    const body = req.body;
+
+    if (!body || typeof body !== 'object') {
+      const err: ErrorResponse = {
+        api_version: API_VERSION,
+        request_id: (req as any).requestId ?? null,
+        error_code: ErrorCode.INVALID_REQUEST_FORMAT,
+        error_message: 'Request body must be a JSON object.'
+      };
+      return reply.code(400).send(err);
+    }
+
+    const payload = body as AnalyzeRequest;
+
+    if (payload.card_type !== 'pokemon' && payload.card_type !== 'trainer' && payload.card_type !== 'energy') {
+      const err: ErrorResponse = {
+        api_version: API_VERSION,
+        request_id: (req as any).requestId ?? null,
+        error_code: ErrorCode.UNSUPPORTED_CARD_TYPE,
+        error_message: "Only card_type in ['pokemon','trainer','energy'] is supported."
+      };
+      return reply.code(400).send(err);
+    }
+
+    const fi = payload.front_image;
+    if (
+      !fi ||
+      (fi.encoding !== 'base64' && fi.encoding !== 'url') ||
+      typeof fi.data !== 'string' ||
+      !fi.data.trim()
+    ) {
+      const err: ErrorResponse = {
+        api_version: API_VERSION,
+        request_id: (req as any).requestId ?? null,
+        error_code: ErrorCode.MISSING_REQUIRED_FIELD,
+        error_message: 'Missing required field: front_image (encoding base64 or url, non-empty data).'
+      };
+      return reply.code(400).send(err);
+    }
+
+    const outcome = await createJob({
+      tenantId: (req as any).tenantId ?? null,
+      requestPayload: payload
+    });
+
+    if ('error' in outcome) {
+      const is501 = outcome.error.includes('not configured');
+      const err: ErrorResponse = {
+        api_version: API_VERSION,
+        request_id: (req as any).requestId ?? null,
+        error_code: is501 ? ErrorCode.NOT_IMPLEMENTED : ErrorCode.INTERNAL_ERROR,
+        error_message: outcome.error
+      };
+      return reply.code(is501 ? 501 : 500).send(err);
+    }
+
+    runJobInBackground(outcome.jobId);
+
+    const resp = {
+      api_version: API_VERSION,
+      request_id: (req as any).requestId,
+      job_id: outcome.jobId,
+      status: 'pending' as const
+    };
+    return reply.code(200).send(resp);
+  }
+);
+
+app.get<{ Params: { id: string } }>(
+  '/v1/jobs/:id',
+  {
+    schema: {
+      params: { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } },
+      response: {
+        200: JobStatusResponseSchema,
+        401: ErrorResponseSchema,
+        404: ErrorResponseSchema,
+        429: ErrorResponseSchema,
+        500: ErrorResponseSchema
+      }
+    }
+  },
+  async (req, reply) => {
+    const jobId = req.params.id;
+    const tenantId = (req as any).tenantId as string | undefined;
+
+    const outcome = await getJob(jobId, tenantId ?? null);
+
+    if ('status' in outcome) {
+      const resp = {
+        api_version: API_VERSION,
+        request_id: (req as any).requestId ?? '',
+        job_id: jobId,
+        status: outcome.status,
+        result: outcome.result ?? undefined,
+        error: outcome.error ?? undefined,
+        created_at: outcome.created_at,
+        completed_at: outcome.completed_at ?? undefined
+      };
+      return reply.code(200).send(resp);
+    }
+
+    const notFound = outcome.error === 'Job not found.';
+    const err: ErrorResponse = {
+      api_version: API_VERSION,
+      request_id: (req as any).requestId ?? null,
+      error_code: ErrorCode.INTERNAL_ERROR,
+      error_message: outcome.error
+    };
+    return reply.code(notFound ? 404 : 500).send(err);
+  }
+);
+
 // Generic 404 that returns a PRD-aligned error envelope.
 app.setNotFoundHandler((req, reply) => {
   const err: ErrorResponse = {
@@ -365,12 +602,24 @@ app.setNotFoundHandler((req, reply) => {
 
 app.addHook('onResponse', async (req, reply) => {
   try {
+    const tenantId = (req as any).tenantId as string | undefined;
+    const requestId = (req as any).requestId as string | undefined;
+    const route = `${req.method} ${req.url.split('?')[0]}`;
+    const durationMs = (reply as any).elapsedTime != null ? Math.round((reply as any).elapsedTime) : undefined;
+
+    // Structured request log (observability).
+    req.log.info({
+      tenant_id: tenantId ?? undefined,
+      request_id: requestId ?? undefined,
+      route,
+      status: reply.statusCode,
+      duration_ms: durationMs
+    }, 'request');
+
     const { logUsage } = await import('./usage.js');
 
     // Best-effort usage logging (no impact on response).
-    const tenantId = (req as any).tenantId as string | undefined;
     const apiKeyId = (req as any).apiKeyId as string | undefined;
-    const requestId = (req as any).requestId as string | undefined;
 
     // Gatekeeper info: only for analyze responses where we return Python envelope.
     let gatekeeperAccepted: boolean | null = null;
@@ -393,9 +642,9 @@ app.addHook('onResponse', async (req, reply) => {
       tenantId,
       apiKeyId,
       requestId,
-      route: `${req.method} ${req.url.split('?')[0]}`,
+      route,
       statusCode: reply.statusCode,
-      durationMs: (reply as any).elapsedTime ? Math.round((reply as any).elapsedTime) : undefined,
+      durationMs,
       gatekeeperAccepted,
       reasonCodes
     });
