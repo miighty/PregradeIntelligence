@@ -1,3 +1,4 @@
+/  /v1/docs  302
 /v1/docs    /redoc.html   200
 /v1/docs/*  /redoc.html   200
 /v1/openapi.yaml  /openapi.yaml  200

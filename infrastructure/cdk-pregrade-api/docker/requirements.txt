@@ -1,0 +1,3 @@
+# Reuse repo root requirements by copying it into the build context.
+# This file exists so Docker build doesn't fail if the copy path changes.
+-r ../requirements.txt

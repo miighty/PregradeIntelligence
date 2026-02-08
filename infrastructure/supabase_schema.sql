@@ -33,3 +33,19 @@ create table if not exists usage_events (
 
 create index if not exists usage_events_tenant_id_idx on usage_events(tenant_id);
 create index if not exists usage_events_created_at_idx on usage_events(created_at);
+
+-- Async analysis jobs (optional Full Analysis flow).
+create table if not exists jobs (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id text null,
+  status text not null default 'pending' check (status in ('pending', 'processing', 'completed', 'failed')),
+  request_payload jsonb not null,
+  result jsonb null,
+  error text null,
+  created_at timestamptz not null default now(),
+  completed_at timestamptz null
+);
+
+create index if not exists jobs_tenant_id_idx on jobs(tenant_id);
+create index if not exists jobs_status_idx on jobs(status);
+create index if not exists jobs_created_at_idx on jobs(created_at);

@@ -71,3 +71,6 @@ eval/*confidence*.csv
 
 # Local Netlify folder
 .netlify
+
+# CDK build output
+infrastructure/cdk-pregrade-api/cdk.out/

@@ -80,3 +80,41 @@ export type CreateUploadResponse = {
   object_url: string;
   expires_at: string;
 };
+
+// Grade endpoint (front + back required; Python supports base64 only in this milestone).
+export type GradeRequest = {
+  card_type: 'pokemon';
+  front_image: { encoding: 'base64'; data: string };
+  back_image: { encoding: 'base64'; data: string };
+  client_reference?: string | null;
+};
+
+export type GradeResponse = {
+  api_version: string;
+  request_id: string;
+  client_reference?: string | null;
+  result: Record<string, unknown>;
+};
+
+// Async jobs (Full Analysis flow).
+export type JobStatus = 'pending' | 'processing' | 'completed' | 'failed';
+
+export type CreateJobRequest = AnalyzeRequest;
+
+export type CreateJobResponse = {
+  api_version: string;
+  request_id: string;
+  job_id: string;
+  status: JobStatus;
+};
+
+export type JobStatusResponse = {
+  api_version: string;
+  request_id: string;
+  job_id: string;
+  status: JobStatus;
+  result?: Record<string, unknown> | null;
+  error?: string | null;
+  created_at: string;
+  completed_at?: string | null;
+};
